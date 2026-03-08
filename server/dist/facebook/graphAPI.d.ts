@@ -1,0 +1,18 @@
+import type { FBPage, FBPost, FBComment, FBSendResponse, FBApiConfig } from './types.js';
+export declare function getFBConfig(): FBApiConfig;
+export declare function isFBConfigured(): boolean;
+export declare function sendMessage(recipientId: string, text: string): Promise<FBSendResponse | null>;
+export declare function sendTypingAction(recipientId: string, action?: 'typing_on' | 'typing_off'): Promise<boolean>;
+export declare function getPageInfo(): Promise<FBPage | null>;
+export declare function getConnectedPages(userAccessToken: string): Promise<FBPage[]>;
+export declare function getPagePosts(limit?: number): Promise<FBPost[]>;
+export declare function createPagePost(message: string, link?: string, imageUrl?: string): Promise<FBPost | null>;
+export declare function deletePost(postId: string): Promise<boolean>;
+export declare function getPostComments(postId: string, limit?: number): Promise<FBComment[]>;
+export declare function replyToComment(commentId: string, message: string): Promise<FBComment | null>;
+export declare function likeComment(commentId: string): Promise<boolean>;
+export declare function getPageConversations(limit?: number): Promise<any[]>;
+export declare function getConversationMessages(conversationId: string, limit?: number): Promise<any[]>;
+export declare function debugToken(token: string): Promise<any>;
+export declare function exchangeForLongLivedToken(shortLivedToken: string): Promise<string | null>;
+export declare function subscribeAppToPage(): Promise<boolean>;

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant Dashboard</title>
+    <style>
+        :root { --primary: #4f46e5; --bg: #f9fafb; --card: #ffffff; --text: #1f2937; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        .grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 20px; }
+        .card { background: var(--card); padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h1, h2 { margin-top: 0; color: var(--primary); }
+        h2 { font-size: 1.1rem; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
+        .field { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.85rem; color: #4b5563; }
+        select, input, textarea { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; font-size: 0.9rem; }
+        button { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        .scroll-area { max-height: 350px; overflow-y: auto; font-size: 0.8rem; }
+        .list-item { padding: 10px; border-bottom: 1px solid #f3f4f6; position: relative; }
+        .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #e5e7eb; margin-right: 5px; font-weight: bold; }
+        .delete-btn { color: #ef4444; cursor: pointer; position: absolute; right: 10px; top: 10px; }
+        .timestamp { display: block; color: #9ca3af; font-size: 0.7rem; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 AI Assistant Command Center</h1>
+        
+        <div class="grid">
+            <!-- Left Column: Config -->
+            <div class="section">
+                <div class="card">
+                    <h2>⚙️ Model Routing Config</h2>
+                    <form id="configForm">
+                        <div id="routingFields"></div>
+                        <button type="submit" style="width: 100%; margin-top: 10px;">บันทึกการตั้งค่า</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h2>🔑 Environment (.env)</h2>
+                    <textarea id="envEditor" style="height: 250px; font-family: monospace;"></textarea>
+                    <button onclick="saveEnv()" style="margin-top: 10px; background: #10b981; width: 100%;">บันทึก .env</button>
+                </div>
+            </div>
+
+            <!-- Right Column: Memory -->
+            <div class="section">
+                <div class="card">
+                    <h2>🧠 Semantic Memory (Knowledge)</h2>
+                    <div id="knowledgeList" class="scroll-area"></div>
+                </div>
+
+                <div class="card">
+                    <h2>📜 Recent System Logs</h2>
+                    <div id="episodeList" class="scroll-area"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tasks = ['general', 'complex', 'vision', 'web', 'thinking'];
+        const taskLabels = {
+            general: "งานทั่วไป (General)", complex: "งานวิเคราะห์/โค้ด (Complex)",
+            vision: "งานภาพ (Vision)", web: "คุมเบราว์เซอร์ (Web)", thinking: "งานใช้ความคิด (Thinking)"
+        };
+
+        // โหลด Config และรายชื่อโมเดล
+        async function init() {
+            const res = await fetch('/api/config');
+            const currentConfig = await res.json();
+            const container = document.getElementById('routingFields');
+            container.innerHTML = '';
+
+            for (const task of tasks) {
+                const info = currentConfig[task];
+                const fieldDiv = document.createElement('div');
+                fieldDiv.className = 'field';
+                fieldDiv.innerHTML = `
+                    <label>${taskLabels[task]}</label>
+                    <div style="display: flex; gap: 8px;">
+                        <select id="${task}_provider" onchange="updateModelList('${task}')" style="width: 35%">
+                            <option value="gemini" ${info.provider === 'gemini' ? 'selected' : ''}>Gemini</option>
+                            <option value="openai" ${info.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+                            <option value="minimax" ${info.provider === 'minimax' ? 'selected' : ''}>MiniMax</option>
+                        </select>
+                        <select id="${task}_model" data-current="${info.modelName}">
+                            <option>กำลังโหลด...</option>
+                        </select>
+                    </div>
+                `;
+                container.appendChild(fieldDiv);
+                updateModelList(task); // โหลดรายชื่อโมเดลครั้งแรก
+            }
+        }
+
+        // ดึงรายชื่อโมเดลจาก API ของ Provider
+        async function updateModelList(task) {
+            const provider = document.getElementById(`${task}_provider`).value;
+            const modelSelect = document.getElementById(`${task}_model`);
+            const currentModel = modelSelect.getAttribute('data-current');
+
+            try {
+                const res = await fetch(`/api/models/${provider}`);
+                const models = await res.json();
+                
+                modelSelect.innerHTML = models.map(m => `
+                    <option value="${m}" ${m === currentModel ? 'selected' : ''}>${m}</option>
+                `).join('');
+                
+                // ถ้าไม่มีโมเดลในลิสต์เลย (หรือ error) ให้ใส่ค่าเก่าไว้กันพัง
+                if (models.length === 0) modelSelect.innerHTML = `<option value="${currentModel}">${currentModel} (Manual)</option>`;
+            } catch (e) {
+                modelSelect.innerHTML = `<option value="${currentModel}">${currentModel}</option>`;
+            }
+        }
+
+        document.getElementById('configForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const newConfig = {};
+            tasks.forEach(t => {
+                newConfig[t] = {
+                    provider: document.getElementById(`${t}_provider`).value,
+                    modelName: document.getElementById(`${t}_model`).value
+                };
+            });
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newConfig)
+            });
+            if (res.ok) alert('บันทึกสำเร็จ!');
+        };
+
+        async function loadMemory() {
+            const kRes = await fetch('/api/memory/knowledge');
+            const knowledge = await kRes.json();
+            document.getElementById('knowledgeList').innerHTML = knowledge.map(k => `
+                <div class="list-item">
+                    <span class="delete-btn" onclick="deleteKnowledge(${k.id})">🗑️</span>
+                    <span class="tag">${k.chat_id}</span> <span class="fact">${k.fact}</span>
+                    <span class="timestamp">${k.timestamp}</span>
+                </div>
+            `).join('') || 'ว่างเปล่า';
+
+            const eRes = await fetch('/api/memory/episodes');
+            const episodes = await eRes.json();
+            document.getElementById('episodeList').innerHTML = episodes.map(e => `
+                <div class="list-item">
+                    <span class="tag">${e.role}</span> <span>${e.content.substring(0, 80)}...</span>
+                    <span class="timestamp">${e.timestamp}</span>
+                </div>
+            `).join('');
+        }
+
+        async function deleteKnowledge(id) {
+            if (confirm('ลบความจำนี้?')) { await fetch(`/api/memory/knowledge/${id}`, { method: 'DELETE' }); loadMemory(); }
+        }
+
+        async function loadEnv() {
+            const res = await fetch('/api/env');
+            document.getElementById('envEditor').value = await res.text();
+        }
+
+        async function saveEnv() {
+            if (!confirm('บันทึก .env?')) return;
+            await fetch('/api/env', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: document.getElementById('envEditor').value })
+            });
+            alert('บันทึกแล้ว!');
+        }
+
+        init(); loadMemory(); loadEnv();
+        setInterval(loadMemory, 15000);
+    </script>
+</body>
+</html>

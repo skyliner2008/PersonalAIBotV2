@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FB AI Agent</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 13px;
+      min-width: 320px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column
+    }
+
+    /* Header */
+    .hdr {
+      background: #1e293b;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid #334155;
+      flex-shrink: 0
+    }
+
+    .hdr img {
+      width: 24px;
+      height: 24px;
+      border-radius: 5px
+    }
+
+    .hdr h1 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #f8fafc;
+      flex: 1
+    }
+
+    .srv-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ef4444;
+      transition: .3s
+    }
+
+    .srv-dot.on {
+      background: #22c55e
+    }
+
+    .srv-lbl {
+      font-size: 10px;
+      color: #64748b
+    }
+
+    /* Nav */
+    .nav {
+      display: flex;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      flex-shrink: 0;
+      overflow-x: auto
+    }
+
+    .tab {
+      flex: 1;
+      padding: 9px 2px;
+      text-align: center;
+      font-size: 11px;
+      color: #64748b;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      min-width: 52px;
+      transition: .2s
+    }
+
+    .tab:hover {
+      color: #94a3b8;
+      background: #1a2540
+    }
+
+    .tab.active {
+      color: #60a5fa;
+      border-bottom-color: #60a5fa;
+      font-weight: 600
+    }
+
+    /* Pages */
+    .pg {
+      display: none;
+      padding: 12px;
+      flex: 1;
+      overflow-y: auto
+    }
+
+    .pg.active {
+      display: block
+    }
+
+    /* Cards */
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px
+    }
+
+    .ct {
+      font-size: 11px;
+      font-weight: 700;
+      color: #60a5fa;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      margin-bottom: 10px
+    }
+
+    /* Status rows */
+    .sr {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid #1e3a5f
+    }
+
+    .sr:last-child {
+      border: none
+    }
+
+    .sl {
+      color: #94a3b8;
+      font-size: 12px
+    }
+
+    .sv {
+      font-weight: 600
+    }
+
+    .on {
+      color: #22c55e
+    }
+
+    .off {
+      color: #ef4444
+    }
+
+    .warn {
+      color: #f59e0b
+    }
+
+    /* Big toggle */
+    .big-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px;
+      background: #0f2040;
+      border: 2px solid #1e3a5f;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: .2s
+    }
+
+    .big-toggle:hover {
+      border-color: #3b82f6
+    }
+
+    .big-toggle.active {
+      border-color: #22c55e;
+      background: #042015
+    }
+
+    .bt-label {
+      font-size: 15px;
+      font-weight: 700
+    }
+
+    .bt-sub {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 2px
+    }
+
+    .toggle {
+      width: 48px;
+      height: 26px;
+      background: #374151;
+      border-radius: 13px;
+      position: relative;
+      transition: .3s;
+      flex-shrink: 0
+    }
+
+    .toggle.active {
+      background: #22c55e
+    }
+
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      background: #fff;
+      border-radius: 50%;
+      transition: .3s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .4)
+    }
+
+    .toggle.active::after {
+      transform: translateX(22px)
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: .2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px
+    }
+
+    .btn-p {
+      background: #3b82f6;
+      color: #fff
+    }
+
+    .btn-p:hover {
+      background: #2563eb
+    }
+
+    .btn-r {
+      background: #ef4444;
+      color: #fff
+    }
+
+    .btn-r:hover {
+      background: #dc2626
+    }
+
+    .btn-g {
+      background: #22c55e;
+      color: #fff
+    }
+
+    .btn-g:hover {
+      background: #16a34a
+    }
+
+    .btn-s {
+      background: #6b7280;
+      color: #fff
+    }
+
+    .btn-s:hover {
+      background: #4b5563
+    }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 11px
+    }
+
+    .btn-xs {
+      padding: 3px 7px;
+      font-size: 10px
+    }
+
+    /* Form inputs */
+    input,
+    textarea,
+    select {
+      width: 100%;
+      padding: 7px 10px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 12px;
+      margin-bottom: 7px;
+      font-family: inherit
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      outline: none;
+      border-color: #3b82f6
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 60px
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 3px
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px
+    }
+
+    .input-row {
+      display: flex;
+      gap: 6px
+    }
+
+    .input-row input {
+      margin-bottom: 0
+    }
+
+    /* Log items */
+    .log-item {
+      padding: 5px 8px;
+      border-left: 3px solid #374151;
+      margin-bottom: 3px;
+      font-size: 11px;
+      background: #0f172a;
+      border-radius: 0 4px 4px 0
+    }
+
+    .log-item.success {
+      border-left-color: #22c55e
+    }
+
+    .log-item.error {
+      border-left-color: #ef4444
+    }
+
+    .log-item.warn {
+      border-left-color: #f59e0b
+    }
+
+    .log-item.info {
+      border-left-color: #3b82f6
+    }
+
+    .log-time {
+      color: #475569;
+      font-size: 10px;
+      font-family: monospace
+    }
+
+    .log-src {
+      color: #7dd3fc;
+      font-weight: 700;
+      font-size: 10px;
+      margin: 0 4px
+    }
+
+    .log-msg {
+      color: #cbd5e1;
+      word-break: break-all
+    }
+
+    /* Persona card */
+    .persona-card {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px
+    }
+
+    .persona-card.default {
+      border-color: #22c55e
+    }
+
+    .persona-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px
+    }
+
+    .persona-name {
+      font-weight: 700;
+      font-size: 13px;
+      flex: 1
+    }
+
+    .default-badge {
+      background: #22c55e;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 10px
+    }
+
+    .persona-desc {
+      color: #64748b;
+      font-size: 11px;
+      margin-bottom: 8px
+    }
+
+    .persona-actions {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap
+    }
+
+    /* Q&A table */
+    .qa-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 6px;
+      align-items: start;
+      padding: 8px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 11px
+    }
+
+    .qa-pattern {
+      color: #60a5fa;
+      word-break: break-all
+    }
+
+    .qa-answer {
+      color: #94a3b8;
+      word-break: break-all
+    }
+
+    .qa-type {
+      color: #64748b;
+      font-size: 10px;
+      text-align: center
+    }
+
+    /* Tabs inside settings */
+    .stabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 10px;
+      flex-wrap: wrap
+    }
+
+    .stab {
+      padding: 5px 10px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 11px;
+      color: #64748b
+    }
+
+    .stab.active {
+      background: #1e3a5f;
+      border-color: #3b82f6;
+      color: #60a5fa;
+      font-weight: 600
+    }
+
+    /* Provider card */
+    .provider-card {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px
+    }
+
+    .provider-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px
+    }
+
+    .provider-name {
+      font-weight: 700;
+      font-size: 13px
+    }
+
+    .provider-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #1e293b
+    }
+
+    /* Model row with load button */
+    .model-row {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 4px
+    }
+
+    .model-row input {
+      margin-bottom: 0;
+      flex: 1
+    }
+
+    .model-select {
+      margin-bottom: 7px;
+      display: none
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid #334155;
+      margin: 10px 0
+    }
+
+    /* Empty */
+    .empty {
+      text-align: center;
+      padding: 24px 10px;
+      color: #475569
+    }
+
+    .empty .icon {
+      font-size: 28px;
+      margin-bottom: 6px
+    }
+
+    /* Result pill */
+    .result {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-top: 6px
+    }
+
+    .result.ok {
+      background: #14532d;
+      color: #4ade80
+    }
+
+    .result.err {
+      background: #450a0a;
+      color: #f87171
+    }
+
+    /* Scroll in log */
+    #logList {
+      max-height: 400px;
+      overflow-y: auto
+    }
+
+    .flex-between {
+      display: flex;
+      justify-content: space-between;
+      align-items: center
+    }
+
+    .mb6 {
+      margin-bottom: 6px
+    }
+
+    .mt6 {
+      margin-top: 6px
+    }
+
+    .mt10 {
+      margin-top: 10px
+    }
+
+    .gap6 {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="hdr">
+    <img src="../icons/icon48.png">
+    <h1>FB AI Agent</h1>
+    <span class="srv-lbl" id="srvLabel">Offline</span>
+    <div class="srv-dot" id="srvDot"></div>
+  </div>
+
+  <div class="nav">
+    <div class="tab active" data-page="dash">Dashboard</div>
+    <div class="tab" data-page="chat">Chat</div>
+    <div class="tab" data-page="fbapi">FB API</div>
+    <div class="tab" data-page="personas">Personas</div>
+    <div class="tab" data-page="qa">Q&amp;A</div>
+    <div class="tab" data-page="settings">Settings</div>
+  </div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div class="pg active" id="pg-dash">
+
+    <div class="big-toggle" id="bigToggle">
+      <div>
+        <div class="bt-label">Auto-Reply</div>
+        <div class="bt-sub" id="autoReplySub">Click to enable AI auto-reply</div>
+      </div>
+      <div class="toggle" id="mainToggle"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">System Status</div>
+      <div class="sr"><span class="sl">Server</span><span class="sv" id="dServer">--</span></div>
+      <div class="sr"><span class="sl">Auto-Reply</span><span class="sv" id="dAutoReply">--</span></div>
+      <div class="sr"><span class="sl">Bot Mode</span><span class="sv" id="dBotMode">--</span></div>
+      <div class="sr"><span class="sl">Queue</span><span class="sv" id="dQueue">--</span></div>
+      <div class="sr"><span class="sl">Active Persona</span><span class="sv" id="dPersona">--</span></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Admin Control & Test Mode</div>
+
+      <!-- Admin ID Section -->
+      <div style="margin-top:5px;padding-bottom:12px;border-bottom:1px dashed #334155">
+        <label>Admin Control ID (Standby & Commands) *</label>
+        <input id="testModeId" placeholder="e.g. 100015232654041" style="margin-bottom:6px">
+        <button class="btn btn-p btn-sm" id="btnSaveTestMode" style="width:100%;justify-content:center">Save Admin
+          Control ID</button>
+        <div id="testModeResult" style="text-align:center;font-size:11px;margin-top:6px"></div>
+        <p style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4">
+          เมื่อใส่ไอดีนี้ บอทจะถอยมาจอดพัก (Standby) ที่หน้าต่างแชทนี้เสมอ และสามารถสั่งพิมพ์ <b
+            style="color:#e2e8f0">/pause</b>, <b style="color:#e2e8f0">/status</b> ผ่านแชทนี้ได้เลย
+          (บอทยังคงตอบลูกค้าคนอื่นตามปกติ)
+        </p>
+      </div>
+
+      <!-- Test Mode Toggle -->
+      <div class="sr" style="border:none;padding-top:12px;padding-bottom:0">
+        <span class="sl" style="color:#f59e0b;font-weight:600">Restrict to Admin Only (Test Mode)</span>
+        <div class="toggle" id="testModeToggle" style="transform:scale(0.8);transform-origin:right"></div>
+      </div>
+      <p style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4">
+        <b>เปิดสวิตช์นี้</b> เมื่อต้องการทดสอบบอท โดยให้บอทอ่านและตอบแชทเฉพาะ ไอดีแอดมิน ที่ระบุด้านบนเท่านั้น
+        (ลูกค้าคนอื่นทักมาบอทจะไม่ตอบ)
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="flex-between mb6">
+        <div class="ct" style="margin:0">Recent Activity</div>
+        <button class="btn btn-p btn-xs" id="btnRefreshDash">↻</button>
+      </div>
+      <div id="dashLogs"></div>
+    </div>
+
+    <!-- Token Usage Card -->
+    <div class="card">
+      <div class="ct">Token Usage</div>
+      <div class="sr"><span class="sl">Today</span><span class="sv" id="dTodayTokens">--</span></div>
+      <div class="sr"><span class="sl">Today Requests</span><span class="sv" id="dTodayReqs">--</span></div>
+      <div class="sr"><span class="sl">Avg Tokens/Req</span><span class="sv" id="dAvgTokens">--</span></div>
+      <div class="sr"><span class="sl">Total (all time)</span><span class="sv" id="dTotalTokens">--</span></div>
+      <div class="sr"><span class="sl">Budget Status</span><span class="sv" id="dBudgetStatus">--</span></div>
+    </div>
+
+    <!-- 3-Layer Memory Stats -->
+    <div class="card">
+      <div class="flex-between mb6">
+        <div class="ct" style="margin:0">AI Memory (3-Layer)</div>
+        <button class="btn btn-p btn-xs" id="btnRefreshMemory">↻</button>
+      </div>
+      <div class="sr"><span class="sl">Conversations</span><span class="sv" id="dMemConvs">--</span></div>
+      <div class="sr"><span class="sl">User Profiles</span><span class="sv" id="dMemProfiles">--</span></div>
+      <div class="sr"><span class="sl">Messages Stored</span><span class="sv" id="dMemMsgs">--</span></div>
+      <div class="sr" style="border:none;padding-top:10px">
+        <button class="btn btn-r btn-sm" id="btnWipeAllMemory" style="width:100%;justify-content:center">🗑️ Wipe All AI
+          Memory</button>
+      </div>
+      <div id="memoryClearResult" style="text-align:center;font-size:11px;margin-top:6px"></div>
+      <p style="font-size:10px;color:#475569;margin-top:8px;line-height:1.4">
+        <b>Layer 1:</b> Recent 5 messages (exact) ·
+        <b>Layer 2:</b> Conversation summary (Markdown) ·
+        <b>Layer 3:</b> User profile (facts + tags)
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="ct">Quick Links</div>
+      <div class="gap6">
+        <button class="btn btn-s btn-sm" id="btnOpenMessenger">Open Messenger</button>
+        <button class="btn btn-r btn-xs" id="btnEmergencyStop">Emergency Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CHAT ============ -->
+  <div class="pg" id="pg-chat">
+    <div class="flex-between mb6">
+      <div class="ct" style="margin:0">Conversations</div>
+      <button class="btn btn-p btn-xs" id="btnRefreshConvs">↻</button>
+    </div>
+    <div id="convList">
+      <div class="empty">
+        <div class="icon">💬</div>No conversations yet
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="card">
+      <div class="ct">Test AI Reply</div>
+      <label>Message to test</label>
+      <input id="testMsg" placeholder="Type a message...">
+      <label>Conversation ID (optional)</label>
+      <input id="testConvId" placeholder="e.g. 100015232654041">
+      <button class="btn btn-p btn-sm" id="btnTestReply">Get AI Reply</button>
+      <div id="testResult" style="margin-top:8px;font-size:11px;color:#64748b"></div>
+    </div>
+  </div>
+
+  <!-- ============ PERSONAS ============ -->
+  <div class="pg" id="pg-personas">
+    <div class="flex-between mb6">
+      <div class="ct" style="margin:0">Bot Personas</div>
+      <button class="btn btn-p btn-xs" id="btnAddPersona">+ New</button>
+    </div>
+    <div id="personaList">
+      <div class="empty">
+        <div class="icon">🧑‍🎤</div>Loading...
+      </div>
+    </div>
+
+    <!-- Create / Edit form (hidden by default) -->
+    <div class="card" id="personaForm" style="display:none">
+      <div class="ct" id="personaFormTitle">New Persona</div>
+      <input type="hidden" id="pfId">
+      <label>Name *</label>
+      <input id="pfName" placeholder="e.g. แอดมินเพจ">
+      <label>Description</label>
+      <input id="pfDesc" placeholder="Short description">
+      <label>System Prompt *</label>
+      <textarea id="pfPrompt" rows="5" placeholder="คุณคือแอดมินเพจ..."></textarea>
+      <div class="form-row">
+        <div>
+          <label>Speaking Style</label>
+          <select id="pfStyle">
+            <option value="casual-thai">Casual Thai (ค่าเริ่มต้น)</option>
+            <option value="formal-thai">Formal Thai</option>
+            <option value="friendly-en">Friendly English</option>
+            <option value="professional-en">Professional English</option>
+          </select>
+        </div>
+        <div>
+          <label>Language</label>
+          <select id="pfLang">
+            <option value="th">Thai 🇹🇭</option>
+            <option value="en">English 🇬🇧</option>
+            <option value="auto">Auto detect</option>
+          </select>
+        </div>
+      </div>
+      <label>Personality Traits (comma separated)</label>
+      <input id="pfTraits" placeholder="friendly, helpful, professional">
+      <div class="form-row">
+        <div>
+          <label>Temperature (0.0–1.0)</label>
+          <input id="pfTemp" type="number" min="0" max="1" step="0.1" value="0.7">
+        </div>
+        <div>
+          <label>Max Tokens</label>
+          <input id="pfTokens" type="number" min="50" max="2000" value="500">
+        </div>
+      </div>
+      <div class="gap6">
+        <button class="btn btn-p btn-sm" id="btnSavePersona">Save</button>
+        <button class="btn btn-s btn-sm" id="btnCancelPersona">Cancel</button>
+      </div>
+      <div id="personaSaveResult" class="mt6"></div>
+    </div>
+
+    <!-- Bot AI Persona (file-based) -->
+    <hr class="divider" style="margin-top:14px">
+    <div class="ct" style="margin:10px 0 4px">🤖 Bot AI Persona (File-based)</div>
+    <p style="font-size:10px;color:#475569;line-height:1.4;margin-bottom:8px">
+      แก้ไข persona จริงที่ใช้ในการตอบแชท — AGENTS / IDENTITY / SOUL / TOOLS
+    </p>
+
+    <div class="stabs" id="botPersonaTabs">
+      <div class="stab active" data-file="agents">AGENTS</div>
+      <div class="stab" data-file="identity">IDENTITY</div>
+      <div class="stab" data-file="soul">SOUL</div>
+      <div class="stab" data-file="tools">TOOLS</div>
+    </div>
+
+    <textarea id="botPersonaText" rows="8" spellcheck="false" placeholder="Loading..."></textarea>
+
+    <div class="flex-between mt6">
+      <div class="gap6">
+        <button class="btn btn-p btn-sm" id="btnSaveBotPersona">Save</button>
+        <button class="btn btn-s btn-xs" id="btnReloadBotPersona">↻</button>
+      </div>
+      <span id="botPersonaResult" style="font-size:11px"></span>
+    </div>
+  </div>
+
+  <!-- ============ Q&A ============ -->
+  <div class="pg" id="pg-qa">
+    <div class="flex-between mb6">
+      <div class="ct" style="margin:0">Q&amp;A Database</div>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="btnAddQA">+ New</button>
+        <button class="btn btn-s btn-xs" id="btnRefreshQA">↻</button>
+      </div>
+    </div>
+
+    <!-- Add form -->
+    <div class="card" id="qaForm" style="display:none">
+      <div class="ct">Add Q&amp;A Pair</div>
+      <label>Pattern *</label>
+      <input id="qaPattern" placeholder="e.g. ราคา">
+      <div class="form-row">
+        <div>
+          <label>Match Type</label>
+          <select id="qaType">
+            <option value="contains">Contains</option>
+            <option value="exact">Exact</option>
+            <option value="regex">Regex</option>
+          </select>
+        </div>
+        <div>
+          <label>Priority</label>
+          <input id="qaPriority" type="number" value="0">
+        </div>
+      </div>
+      <label>Answer *</label>
+      <textarea id="qaAnswer" rows="3" placeholder="ตอบว่า..."></textarea>
+      <label>Category</label>
+      <input id="qaCategory" placeholder="e.g. pricing">
+      <div class="gap6">
+        <button class="btn btn-p btn-sm" id="btnSaveQA">Save</button>
+        <button class="btn btn-s btn-sm" id="btnCancelQA">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Test -->
+    <div class="card">
+      <div class="ct">Test Q&amp;A Match</div>
+      <div class="input-row">
+        <input id="qaTestInput" placeholder="Test a message...">
+        <button class="btn btn-p btn-sm" id="btnTestQA">Test</button>
+      </div>
+      <div id="qaTestResult" style="margin-top:6px;font-size:11px;color:#64748b"></div>
+    </div>
+
+    <div id="qaList">
+      <div class="empty">
+        <div class="icon">🗂️</div>Loading...
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SETTINGS ============ -->
+  <div class="pg" id="pg-settings">
+
+    <!-- Bot Behavior -->
+    <div class="card">
+      <div class="ct">Bot Behavior</div>
+      <label>ไม่ตอบข้อความที่เก่าเกิน (วัน)</label>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="number" id="settingMaxDays" value="7" min="1" max="365" style="width:70px;margin:0">
+        <span style="color:#64748b;font-size:11px">วัน (ค่าเริ่มต้น: 7 วัน)</span>
+      </div>
+      <p style="font-size:10px;color:#475569;margin-bottom:8px">
+        ข้อความที่ค้างนานกว่านี้จะถูกข้ามไป ไม่ตอบ
+      </p>
+      <div class="gap6">
+        <button class="btn btn-p btn-sm" id="btnSaveBotBehavior">Save</button>
+        <button class="btn btn-r btn-xs" id="btnResetSession">Reset Session</button>
+        <span id="botBehaviorResult" style="font-size:11px"></span>
+      </div>
+      <p style="font-size:10px;color:#475569;margin-top:6px">
+        "Reset Session" จะล้าง queue และรายการที่ตอบไปแล้ว ทำให้ bot เริ่ม scan ใหม่ทั้งหมด
+      </p>
+
+      <hr class="divider">
+      <div class="ct" style="margin-top:8px">Token Budget</div>
+      <label>Daily token limit (0 = unlimited)</label>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="number" id="settingDailyBudget" value="0" min="0" max="10000000" style="width:100px;margin:0">
+        <span style="color:#64748b;font-size:11px">tokens/day</span>
+      </div>
+      <div class="gap6">
+        <button class="btn btn-p btn-sm" id="btnSaveTokenBudget">Save Budget</button>
+        <button class="btn btn-r btn-xs" id="btnResetTokens">Reset Counters</button>
+        <span id="tokenBudgetResult" style="font-size:11px"></span>
+      </div>
+    </div>
+
+    <!-- Task routing -->
+    <div class="card">
+      <div class="ct">Task Routing</div>
+      <label>Chat Bot uses</label>
+      <select id="routeChat">
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
+        <option value="minimax">MiniMax</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <label>Content Creator uses</label>
+      <select id="routeContent">
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
+        <option value="minimax">MiniMax</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <button class="btn btn-p btn-sm" id="btnSaveRouting">Save Routing</button>
+      <div id="routingResult" class="mt6"></div>
+    </div>
+
+    <!-- Per-provider settings -->
+    <div class="ct" style="margin:10px 0 6px">API Keys &amp; Models</div>
+
+    <!-- OpenAI -->
+    <div class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">OpenAI</span>
+        <span class="provider-badge" id="badge-openai">Not set</span>
+      </div>
+      <label>API Key</label>
+      <input type="password" id="key-openai" placeholder="sk-...">
+      <label>Model</label>
+      <div class="model-row">
+        <input id="model-openai" placeholder="gpt-4o-mini">
+        <button class="btn btn-s btn-xs" id="loadmodels-openai" title="Load available models">⬇ Load</button>
+      </div>
+      <select class="model-select" id="modelsel-openai"></select>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="save-openai">Save</button>
+        <button class="btn btn-s btn-xs" id="test-openai">Test</button>
+        <span id="res-openai" style="font-size:11px"></span>
+      </div>
+    </div>
+
+    <!-- Gemini -->
+    <div class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">Gemini</span>
+        <span class="provider-badge" id="badge-gemini">Not set</span>
+      </div>
+      <label>API Key</label>
+      <input type="password" id="key-gemini" placeholder="AIzaSy...">
+      <label>Model</label>
+      <div class="model-row">
+        <input id="model-gemini" placeholder="gemini-1.5-flash">
+        <button class="btn btn-s btn-xs" id="loadmodels-gemini" title="Load available models">⬇ Load</button>
+      </div>
+      <select class="model-select" id="modelsel-gemini"></select>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="save-gemini">Save</button>
+        <button class="btn btn-s btn-xs" id="test-gemini">Test</button>
+        <span id="res-gemini" style="font-size:11px"></span>
+      </div>
+    </div>
+
+    <!-- MiniMax -->
+    <div class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">MiniMax</span>
+        <span class="provider-badge" id="badge-minimax">Not set</span>
+      </div>
+      <label>API Key</label>
+      <input type="password" id="key-minimax" placeholder="eyJ...">
+      <label>Model</label>
+      <div class="model-row">
+        <input id="model-minimax" placeholder="abab6.5s-chat">
+        <button class="btn btn-s btn-xs" id="loadmodels-minimax" title="Load available models">⬇ Load</button>
+      </div>
+      <select class="model-select" id="modelsel-minimax"></select>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="save-minimax">Save</button>
+        <button class="btn btn-s btn-xs" id="test-minimax">Test</button>
+        <span id="res-minimax" style="font-size:11px"></span>
+      </div>
+    </div>
+
+    <!-- OpenRouter -->
+    <div class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">OpenRouter</span>
+        <span class="provider-badge" id="badge-openrouter">Not set</span>
+      </div>
+      <label>API Key</label>
+      <input type="password" id="key-openrouter" placeholder="sk-or-...">
+      <label>Model</label>
+      <div class="model-row">
+        <input id="model-openrouter" placeholder="openai/gpt-4o-mini">
+        <button class="btn btn-s btn-xs" id="loadmodels-openrouter" title="Load available models">⬇ Load</button>
+      </div>
+      <select class="model-select" id="modelsel-openrouter"></select>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="save-openrouter">Save</button>
+        <button class="btn btn-s btn-xs" id="test-openrouter">Test</button>
+        <span id="res-openrouter" style="font-size:11px"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ FB API ============ -->
+  <div class="pg" id="pg-fbapi">
+
+    <!-- Connection Status -->
+    <div class="card">
+      <div class="ct">Facebook Graph API</div>
+      <div class="sr"><span class="sl">Status</span><span class="sv" id="fbApiStatus">--</span></div>
+      <div class="sr"><span class="sl">Page</span><span class="sv" id="fbPageName">--</span></div>
+      <div class="sr"><span class="sl">Page ID</span><span class="sv" id="fbPageId">--</span></div>
+      <div class="gap6 mt6">
+        <button class="btn btn-p btn-xs" id="btnFbRefresh">Refresh</button>
+        <button class="btn btn-g btn-xs" id="btnFbSubscribe">Subscribe Webhook</button>
+      </div>
+      <div id="fbStatusResult" class="mt6"></div>
+    </div>
+
+    <!-- FB API Config -->
+    <div class="card">
+      <div class="ct">API Configuration</div>
+      <label>App ID</label>
+      <input id="fbAppId" placeholder="Facebook App ID">
+      <label>App Secret</label>
+      <input type="password" id="fbAppSecret" placeholder="Facebook App Secret">
+      <label>Page Access Token</label>
+      <input type="password" id="fbPageToken" placeholder="Page Access Token (long-lived)">
+      <label>Page ID</label>
+      <input id="fbPageIdInput" placeholder="Page ID (numeric)">
+      <label>Webhook Verify Token</label>
+      <input id="fbVerifyToken" placeholder="Custom verify token" value="fbai_verify_2024">
+
+      <div class="gap6 mt6">
+        <button class="btn btn-p btn-sm" id="btnFbSaveConfig">Save Config</button>
+        <button class="btn btn-s btn-xs" id="btnFbTestToken">Test Token</button>
+        <button class="btn btn-s btn-xs" id="btnFbExtendToken">Extend Token</button>
+      </div>
+      <div id="fbConfigResult" class="mt6"></div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card">
+      <div class="ct">Quick Actions</div>
+
+      <!-- Send Message -->
+      <label>Send Message (Recipient PSID)</label>
+      <div class="input-row mb6">
+        <input id="fbSendTo" placeholder="PSID" style="width:120px;margin:0">
+        <input id="fbSendMsg" placeholder="Message text..." style="margin:0">
+        <button class="btn btn-p btn-xs" id="btnFbSend">Send</button>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Create Post -->
+      <label>Create Page Post</label>
+      <textarea id="fbPostContent" rows="2" placeholder="Post content..."></textarea>
+      <div class="input-row mb6">
+        <input id="fbPostLink" placeholder="Link URL (optional)" style="margin:0">
+        <button class="btn btn-g btn-xs" id="btnFbPost">Post</button>
+      </div>
+      <div id="fbActionResult" class="mt6"></div>
+    </div>
+
+    <!-- Page Posts -->
+    <div class="card">
+      <div class="flex-between mb6">
+        <div class="ct" style="margin:0">Recent Page Posts</div>
+        <button class="btn btn-p btn-xs" id="btnFbLoadPosts">Load</button>
+      </div>
+      <div id="fbPostsList">
+        <div class="empty" style="padding:10px">Click "Load" to fetch posts</div>
+      </div>
+    </div>
+
+    <!-- API Conversations -->
+    <div class="card">
+      <div class="flex-between mb6">
+        <div class="ct" style="margin:0">API Conversations</div>
+        <button class="btn btn-p btn-xs" id="btnFbLoadConvs">Load</button>
+      </div>
+      <div id="fbConvsList">
+        <div class="empty" style="padding:10px">Click "Load" to fetch conversations</div>
+      </div>
+    </div>
+
+    <!-- Webhook Info -->
+    <div class="card">
+      <div class="ct">Webhook Setup Guide</div>
+      <p style="font-size:11px;color:#94a3b8;line-height:1.5">
+        1. ไปที่ <a href="https://developers.facebook.com" target="_blank" style="color:#60a5fa">Facebook Developers</a>
+        &gt; App &gt; Webhooks<br>
+        2. ตั้ง Callback URL: <code
+          style="background:#0f172a;padding:2px 5px;border-radius:3px;color:#fbbf24">https://your-domain.com/webhook</code><br>
+        3. ใส่ Verify Token ตรงกับด้านบน<br>
+        4. Subscribe to: <code
+          style="background:#0f172a;padding:2px 5px;border-radius:3px;color:#fbbf24">messages, messaging_postbacks, feed</code><br>
+        5. ใช้ ngrok สำหรับ local dev: <code
+          style="background:#0f172a;padding:2px 5px;border-radius:3px;color:#fbbf24">ngrok http 3000</code>
+      </p>
+    </div>
+  </div>
+
+  <!-- Hidden: logs tab accessible from dashboard only for now -->
+  <!-- Full logs are in Dashboard "Recent Activity" with a "View All" link -->
+
+  <!-- Logs tab (5th) -->
+  <div class="pg" id="pg-logs" style="display:none">
+    <div class="flex-between mb6">
+      <div class="ct" style="margin:0">Full Logs</div>
+      <div class="gap6">
+        <button class="btn btn-p btn-xs" id="btnRefreshLogs">↻</button>
+      </div>
+    </div>
+    <div id="logList"></div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+
+</html>

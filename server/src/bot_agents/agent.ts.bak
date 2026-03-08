@@ -1,0 +1,282 @@
+import { Content, Part, GoogleGenAI } from '@google/genai';
+import { tools, getFunctionHandlers, BotContext } from './tools/index.js';
+import {
+  addMessage as umAddMessage, addEpisode, buildContext,
+  setCoreMemory, shouldExtractCore, shouldExtractArchival,
+  saveArchivalFact, setEmbeddingProvider, getWorkingMemory,
+} from '../memory/unifiedMemory.js';
+import { classifyTask, TaskType } from './config/aiConfig.js';
+import { configManager } from './config/configManager.js';
+import { personaManager } from '../ai/personaManager.js';
+import { GeminiProvider } from './providers/geminiProvider.js';
+import { OpenAICompatibleProvider } from './providers/openaiCompatibleProvider.js';
+import { AIProvider } from './providers/baseProvider.js';
+
+// Total timeout for the entire agent processing (60 seconds)
+const AGENT_TIMEOUT_MS = 60000;
+// Per-tool execution timeout (30 seconds)
+const TOOL_TIMEOUT_MS = 30000;
+
+export class Agent {
+  private providers: Record<string, AIProvider>;
+
+  constructor(apiKey: string) {
+    this.providers = {
+      gemini: new GeminiProvider(apiKey),
+      openai: new OpenAICompatibleProvider(process.env.OPENAI_API_KEY || ''),
+      minimax: new OpenAICompatibleProvider(
+        process.env.MINIMAX_API_KEY || '',
+        'https://api.minimax.io/v1'
+      )
+    };
+    // Set up embedding provider for archival memory
+    const ai = new GoogleGenAI({ apiKey });
+    setEmbeddingProvider(async (text: string) => {
+      const result = await ai.models.embedContent({
+        model: 'gemini-embedding-001',
+        contents: [{ role: 'user', parts: [{ text }] }]
+      });
+      return result.embeddings?.[0]?.values || [];
+    });
+  }
+
+  public async processMessage(
+    chatId: string,
+    message: string,
+    ctx: BotContext,
+    attachments?: Part[]
+  ): Promise<string> {
+    // Create abort controller for timeout
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), AGENT_TIMEOUT_MS);
+
+    try {
+      // 1. วิเคราะห์งานและดึงคอนฟิกล่าสุดจากไฟล์
+      const taskType = classifyTask(message, !!attachments);
+      const routing = configManager.getConfig();
+      const config = routing[taskType];
+      const provider = this.providers[config.provider];
+      if (!provider) {
+        return `Error: Provider ${config.provider} not configured. Check your .env file.`;
+      }
+
+      console.log(`[Router] Task: ${taskType} -> Model: ${config.modelName} (Provider: ${config.provider})`);
+
+      // 2. Build unified memory context (all 4 layers)
+      const memoryCtx = await buildContext(chatId, message);
+
+      // 3. Save user message to unified memory
+      umAddMessage(chatId, 'user', message);
+      addEpisode(chatId, 'user', message);
+
+      // 4. Build conversation history from working memory
+      const history: Content[] = memoryCtx.workingMessages.map(m => ({
+        role: m.role === 'user' ? 'user' as const : 'model' as const,
+        parts: [{ text: m.content }]
+      }));
+
+      const userParts: Part[] = [{ text: message }];
+      if (attachments) userParts.push(...attachments);
+
+      // 4.5 Pre-search: For web tasks, auto-fetch search results and inject into context
+      // This ensures the model always has real data to summarize, even if it doesn't call tools
+      if (taskType === TaskType.WEB_BROWSER) {
+        try {
+          const { webSearch } = await import('./tools/limitless.js');
+          console.log(`[Agent] Pre-searching for web task: "${message}"`);
+          const searchResults = await webSearch({ query: message });
+          if (searchResults && !searchResults.includes('ไม่พบผลลัพธ์')) {
+            userParts.push({ text: `\n\n[ผลการค้นหาล่าสุดจากอินเทอร์เน็ต — ใช้ข้อมูลนี้ตอบผู้ใช้โดยตรง ห้ามบอกให้ไปดูเว็บเอง]:\n${searchResults}` });
+          }
+        } catch (err) {
+          console.error('[Agent] Pre-search failed:', err);
+        }
+      }
+
+      let currentContents: Content[] = [
+        ...history,
+        { role: 'user', parts: userParts }
+      ];
+
+      let currentTurn = 0;
+      const MAX_TURNS = 10;
+      const handlers = getFunctionHandlers(ctx);
+      let finalResponseText = '';
+
+      // Build archival context string
+      const archivalCtx = memoryCtx.archivalFacts.length > 0
+        ? `\n[Archival Memory]: ${memoryCtx.archivalFacts.join(' | ')}`
+        : '';
+
+      // 5. Load File-Based Persona & Filter Tools
+      const personaConfig = personaManager.loadPersona(ctx.platform);
+
+      const systemInstruction = personaConfig.systemInstruction +
+        `\n\n[Core Profile]\n${memoryCtx.coreMemoryText}\n${archivalCtx}`;
+
+      // Only give the agent the tools explicitly enabled in TOOLS.md
+      const activeTools = tools.filter(t => t.name && personaConfig.enabledTools.includes(t.name));
+      const activeHandlers: Record<string, Function> = {};
+
+      // Check if Gemini Google Search grounding is enabled
+      const useGoogleSearch = personaConfig.enabledTools.includes('google_search');
+
+      // Filter handlers slightly to match active Tools (mostly for safety)
+      for (const [name, fn] of Object.entries(handlers)) {
+        if (personaConfig.enabledTools.includes(name)) {
+          activeHandlers[name] = fn;
+        }
+      }
+
+      while (currentTurn < MAX_TURNS) {
+        // Check for timeout abort
+        if (abortController.signal.aborted) {
+          console.warn(`[Agent] Timeout reached after ${currentTurn} turns for chat ${chatId}`);
+          return "ขออภัยครับ ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง";
+        }
+
+        currentTurn++;
+
+        const response = await provider.generateResponse(
+          config.modelName,
+          systemInstruction,
+          currentContents,
+          activeTools.length > 0 ? activeTools : undefined,
+          useGoogleSearch
+        );
+
+        if (response.usage) {
+          console.log(`[Tokens] Turn ${currentTurn}: P=${response.usage.promptTokens}, C=${response.usage.completionTokens}, T=${response.usage.totalTokens}`);
+        }
+
+        if (response.toolCalls && response.toolCalls.length > 0) {
+          // 1. Push the model turn with REAL functionCall parts (required by Gemini)
+          if (response.rawModelContent) {
+            currentContents.push(response.rawModelContent);
+          } else {
+            // Fallback: reconstruct functionCall parts
+            currentContents.push({
+              role: 'model',
+              parts: response.toolCalls.map((call: any) => ({
+                functionCall: { name: call.name, args: call.args }
+              }))
+            });
+          }
+
+          // 2. Execute tools and collect proper functionResponse parts
+          const responseParts: Part[] = [];
+
+          for (const call of response.toolCalls) {
+            if (abortController.signal.aborted) break;
+
+            const funcName = call.name;
+            const args = call.args;
+            console.log(`[Tool] ${funcName}(${JSON.stringify(args).substring(0, 80)})`);
+
+            let resultStr: string;
+            try {
+              const toolPromise = activeHandlers[funcName]
+                ? activeHandlers[funcName](args)
+                : Promise.resolve(`Error: Tool '${funcName}' is not found or not enabled in TOOLS.md`);
+              resultStr = await Promise.race([
+                toolPromise,
+                new Promise<string>((_, reject) =>
+                  setTimeout(() => reject(new Error(`Tool '${funcName}' timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)
+                )
+              ]);
+              if (typeof resultStr === 'string' && resultStr.length > 8000) {
+                resultStr = resultStr.substring(0, 8000) + '\n...(ข้อมูลถูกตัดให้สั้นลง)';
+              }
+            } catch (toolErr: any) {
+              console.error(`[Agent] Tool '${funcName}' error:`, toolErr);
+              resultStr = `Error: ${toolErr.message}`;
+            }
+
+            // 3. Proper Gemini functionResponse format
+            responseParts.push({
+              functionResponse: {
+                name: funcName,
+                response: { output: resultStr }
+              }
+            } as any);
+
+            addEpisode(chatId, 'system', `Used tool: ${funcName}`);
+          }
+
+          // 4. Push user turn with all functionResponse parts
+          currentContents.push({ role: 'user', parts: responseParts });
+          continue;
+        }
+
+        if (response.text) {
+          finalResponseText = response.text;
+          umAddMessage(chatId, 'assistant', finalResponseText);
+          addEpisode(chatId, 'model', finalResponseText);
+          break;
+        }
+        break;
+      }
+
+      // Auto-extract to archival memory every Nth message
+      if (message.length > 10 && shouldExtractArchival(chatId)) {
+        this.extractFact(chatId, message, finalResponseText);
+      }
+
+      // Auto-update core memory every Nth message
+      if (shouldExtractCore(chatId)) {
+        this.extractCoreProfile(chatId, message, finalResponseText);
+      }
+
+      return finalResponseText || "Done.";
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        return "ขออภัยครับ ใช้เวลาประมวลผลนานเกินไป กรุณาลองใหม่อีกครั้ง";
+      }
+      console.error("[Agent Error]:", error);
+      return `Error: ${error.message}`;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private async extractFact(chatId: string, userMsg: string, aiMsg: string) {
+    try {
+      const provider = this.providers.gemini;
+      const res = await provider.generateResponse(
+        'gemini-2.0-flash-lite',
+        "Extract 1 short fact about user or 'NONE'. No think tags.",
+        [{ role: 'user', parts: [{ text: `U:${userMsg} AI:${aiMsg}` }] }]
+      );
+      const fact = res.text?.trim();
+      if (fact && fact !== 'NONE' && fact.length > 5 && fact.length < 200) {
+        await saveArchivalFact(chatId, fact);
+      }
+    } catch (err) {
+      console.error('[Agent] Archival extraction failed:', err);
+    }
+  }
+
+  private async extractCoreProfile(chatId: string, userMsg: string, aiMsg: string) {
+    try {
+      const provider = this.providers.gemini;
+      const res = await provider.generateResponse(
+        'gemini-2.0-flash-lite',
+        `Summarize what you know about this user in 2-3 bullet points. Output plain text only, no JSON, no think tags.`,
+        [{ role: 'user', parts: [{ text: `User said: ${userMsg}\nAI replied: ${aiMsg}` }] }]
+      );
+      const profile = res.text?.trim();
+      if (profile && profile.length > 5) {
+        setCoreMemory(chatId, 'human', profile);
+      }
+    } catch (err) {
+      console.error('[Agent] Core memory extraction failed:', err);
+    }
+  }
+
+  // --- เพิ่มฟังก์ชันดึงรายชื่อโมเดล ---
+  public async getAvailableModels(providerName: string): Promise<string[]> {
+    const provider = this.providers[providerName];
+    if (!provider) return [];
+    return await provider.listModels();
+  }
+}

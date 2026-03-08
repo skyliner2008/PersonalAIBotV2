@@ -1,0 +1,111 @@
+{
+  "settings": [
+    {
+      "key": "ai_gemini_key",
+      "value": "AIzaSyAC6zPDEf402K2--5wrOivM2VS3vZAeewc",
+      "updated_at": "2026-02-26 08:47:08"
+    },
+    {
+      "key": "ai_task_chat_provider",
+      "value": "gemini",
+      "updated_at": "2026-02-28 07:32:23"
+    },
+    {
+      "key": "ai_gemini_model",
+      "value": "gemini-2.5-pro",
+      "updated_at": "2026-02-26 16:56:05"
+    },
+    {
+      "key": "ai_minimax_key",
+      "value": "sk-cp-WZukQz3xQR7y66vaN5mKJIIDaXF45u6p7tqQsbEpLvYH2NlSlrdncmt2Fn2c_ygi6oz2BxgUj7fHKINfisi818uCPpiXORvfZFQVU_Xd76xbvrXmQAuX9PE",
+      "updated_at": "2026-02-26 08:48:20"
+    },
+    {
+      "key": "ai_openrouter_key",
+      "value": "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",
+      "updated_at": "2026-02-26 08:48:42"
+    },
+    {
+      "key": "ai_openai_key",
+      "value": "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",
+      "updated_at": "2026-02-26 08:49:03"
+    },
+    {
+      "key": "ai_openai_model",
+      "value": "gpt-5.3-codex",
+      "updated_at": "2026-02-26 08:57:07"
+    },
+    {
+      "key": "ai_minimax_model",
+      "value": "MiniMax-M2.5",
+      "updated_at": "2026-02-26 08:57:18"
+    },
+    {
+      "key": "ai_task_content_provider",
+      "value": "gemini",
+      "updated_at": "2026-02-28 07:32:23"
+    }
+  ],
+  "logs": [
+    {
+      "id": 47946,
+      "type": "chat",
+      "action": "AI reply",
+      "details": "[อัศวิน ม้าก้านกล้วย] \"เพื่ออะไร\nเงียบ\nขอตรวจสอบข้อมู\" → \"ขอตรวจสอบข้อมูลก่อนนะคะ แล้วจะ\" [1918t ~377est]"
+    },
+    {
+      "id": 47945,
+      "type": "chat",
+      "action": "Empty reply after stripping",
+      "details": "AI returned only thinking tags"
+    },
+    {
+      "id": 47944,
+      "type": "memory",
+      "action": "Summary failed",
+      "details": "OpenAI error 429: You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."
+    },
+    {
+      "id": 47943,
+      "type": "chat",
+      "action": "AI reply",
+      "details": "[อัศวิน ม้าก้านกล้วย] \"ตรวจสอบทำไม\nเพื่ออะไร\nเงียบ\nขอ\" → \"ขอตรวจสอบข้อมูลก่อนนะคะ แล้วจะ\" [1894t ~345est]"
+    },
+    {
+      "id": 47942,
+      "type": "chat",
+      "action": "Empty reply after stripping",
+      "details": "AI returned only thinking tags"
+    },
+    {
+      "id": 47941,
+      "type": "memory",
+      "action": "Summary failed",
+      "details": "OpenAI error 429: You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."
+    },
+    {
+      "id": 47940,
+      "type": "chat",
+      "action": "AI reply",
+      "details": "[อัศวิน ม้าก้านกล้วย] \"ทำไร\nขอตรวจสอบข้อมูลก่อนนะคะ แ\" → \"ขอตรวจสอบข้อมูลก่อนนะคะ แล้วจะ\" [4947t ~340est]"
+    },
+    {
+      "id": 47939,
+      "type": "chat",
+      "action": "Empty reply after stripping",
+      "details": "AI returned only thinking tags"
+    },
+    {
+      "id": 47938,
+      "type": "chat",
+      "action": "AI reply",
+      "details": "[อัศวิน ม้าก้านกล้วย] \"โอ้ยยย ไม่\nอะไรไม่\nเงียบ\nทำไร\" → \"ขอตรวจสอบข้อมูลก่อนนะคะ แล้วจะ\" [4919t ~348est]"
+    },
+    {
+      "id": 47937,
+      "type": "chat",
+      "action": "Empty reply after stripping",
+      "details": "AI returned only thinking tags"
+    }
+  ]
+}

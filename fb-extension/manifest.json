@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "FB AI Agent",
+  "version": "1.0.0",
+  "description": "AI-powered Facebook Messenger auto-reply — Side Panel Dashboard",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "alarms",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://web.facebook.com/*",
+    "http://localhost:3000/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/",
+        "https://www.facebook.com/?*",
+        "https://www.facebook.com/messages/*",
+        "https://web.facebook.com/",
+        "https://web.facebook.com/?*",
+        "https://web.facebook.com/messages/*"
+      ],
+      "js": ["src/messenger-content.js"],
+      "css": ["src/messenger-content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel.html"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "FB AI Agent"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

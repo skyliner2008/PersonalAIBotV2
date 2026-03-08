@@ -1,0 +1,22 @@
+{
+  "general": {
+    "provider": "gemini",
+    "modelName": "gemini-2.0-flash-lite"
+  },
+  "complex": {
+    "provider": "minimax",
+    "modelName": "abab7-chat-preview"
+  },
+  "vision": {
+    "provider": "gemini",
+    "modelName": "gemini-2.0-flash"
+  },
+  "web": {
+    "provider": "gemini",
+    "modelName": "gemini-2.0-flash"
+  },
+  "thinking": {
+    "provider": "gemini",
+    "modelName": "gemini-2.0-flash-thinking-exp-01-21"
+  }
+}
