@@ -4,6 +4,7 @@
 // ============================================================
 
 import { Router } from 'express';
+import crypto from 'crypto';
 
 /** Parse a query param as a positive integer, clamped to [min, max] */
 function parseIntParam(value: unknown, defaultVal: number, min = 1, max = 500): number {
@@ -11,7 +12,8 @@ function parseIntParam(value: unknown, defaultVal: number, min = 1, max = 500): 
   if (Number.isNaN(n) || n < min) return defaultVal;
   return Math.min(n, max);
 }
-import { addLog, setSetting, getSetting } from '../database/db.js';
+import { addLog } from '../database/db.js';
+import { setManagedSetting } from '../config/settingsSecurity.js';
 import {
   getFBConfig,
   isFBConfigured,
@@ -54,8 +56,64 @@ fbRouter.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Verify Facebook webhook signature
+function verifyFacebookSignature(req: any): boolean {
+  const cfg = getFBConfig();
+  const xHubSignature = req.get('x-hub-signature');
+  const rawBody = req.rawBody || JSON.stringify(req.body);
+
+  if (!xHubSignature) {
+    console.warn('[Webhook] Missing x-hub-signature header');
+    addLog('webhook', 'Unverified webhook', 'Missing signature header', 'warning');
+    return false;
+  }
+
+  if (!cfg.appSecret) {
+    console.error('[Webhook] App secret not configured');
+    return false;
+  }
+
+  try {
+    // Parse signature: sha1=...
+    const [algorithm, providedHash] = xHubSignature.split('=');
+    if (algorithm !== 'sha1') {
+      console.warn('[Webhook] Unexpected signature algorithm:', algorithm);
+      return false;
+    }
+
+    // Compute hash
+    const computedHash = crypto
+      .createHmac('sha1', cfg.appSecret)
+      .update(rawBody)
+      .digest('hex');
+
+    // Constant-time comparison
+    const match = crypto.timingSafeEqual(
+      Buffer.from(providedHash),
+      Buffer.from(computedHash)
+    );
+
+    if (!match) {
+      console.warn('[Webhook] Signature mismatch');
+      addLog('webhook', 'Unverified webhook', 'Signature verification failed', 'warning');
+    }
+
+    return match;
+  } catch (err: any) {
+    console.error('[Webhook] Signature verification error:', err.message);
+    addLog('webhook', 'Signature error', err.message, 'error');
+    return false;
+  }
+}
+
 // Facebook webhook events (POST)
 fbRouter.post('/webhook', (req, res) => {
+  // Verify webhook signature
+  if (!verifyFacebookSignature(req)) {
+    console.warn('[Webhook] Signature verification failed, rejecting request');
+    return res.sendStatus(403);
+  }
+
   const body = req.body;
 
   if (body.object !== 'page') {
@@ -91,12 +149,12 @@ fbRouter.get('/status', (req, res) => {
 
 fbRouter.post('/config', (req, res) => {
   const { appId, appSecret, pageAccessToken, pageId, verifyToken, apiVersion } = req.body;
-  if (appId !== undefined) setSetting('fb_app_id', appId);
-  if (appSecret !== undefined) setSetting('fb_app_secret', appSecret);
-  if (pageAccessToken !== undefined) setSetting('fb_page_access_token', pageAccessToken);
-  if (pageId !== undefined) setSetting('fb_page_id', pageId);
-  if (verifyToken !== undefined) setSetting('fb_verify_token', verifyToken);
-  if (apiVersion !== undefined) setSetting('fb_api_version', apiVersion);
+  if (appId !== undefined) setManagedSetting('fb_app_id', appId);
+  if (appSecret !== undefined) setManagedSetting('fb_app_secret', appSecret);
+  if (pageAccessToken !== undefined) setManagedSetting('fb_page_access_token', pageAccessToken);
+  if (pageId !== undefined) setManagedSetting('fb_page_id', pageId);
+  if (verifyToken !== undefined) setManagedSetting('fb_verify_token', verifyToken);
+  if (apiVersion !== undefined) setManagedSetting('fb_api_version', apiVersion);
   addLog('fb-api', 'Config updated', 'Facebook API settings saved', 'success');
   res.json({ success: true });
 });
@@ -125,9 +183,9 @@ fbRouter.post('/page/select', async (req, res) => {
   if (!pageId || !pageAccessToken) {
     return res.status(400).json({ error: 'pageId and pageAccessToken are required' });
   }
-  setSetting('fb_page_id', pageId);
-  setSetting('fb_page_access_token', pageAccessToken);
-  if (pageName) setSetting('fb_page_name', pageName);
+  setManagedSetting('fb_page_id', pageId);
+  setManagedSetting('fb_page_access_token', pageAccessToken);
+  if (pageName) setManagedSetting('fb_page_name', pageName);
   addLog('fb-api', 'Page selected', `${pageName || pageId}`, 'success');
   res.json({ success: true });
 });

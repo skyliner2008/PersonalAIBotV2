@@ -1,0 +1,20 @@
+{
+  "name": "fetch_weather",
+  "description": "ดึงข้อมูลสภาพอากาศสำหรับตำแหน่งที่ระบุ",
+  "code": "const location = String(args.location ?? 'Bangkok');\nconst unit = String(args.unit ?? 'celsius');\n\n// Example: fetch from open weather API\nconst response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=13.7563&longitude=100.5018&current_weather=true`);\nconst data = await response.json();\n\nif (data.current_weather) {\n  const w = data.current_weather;\n  return `🌤️ Weather in ${location}:\\n• Temperature: ${w.temperature}°${unit === 'fahrenheit' ? 'F' : 'C'}\\n• Wind: ${w.windspeed} km/h\\n• Code: ${w.weathercode}`;\n}\n\nreturn 'ไม่สามารถดึงข้อมูลสภาพอากาศได้';\n",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string",
+        "description": "Location name (e.g., 'Bangkok', 'Tokyo')"
+      },
+      "unit": {
+        "type": "string",
+        "description": "Temperature unit: 'celsius' or 'fahrenheit'",
+        "enum": ["celsius", "fahrenheit"]
+      }
+    },
+    "required": ["location"]
+  }
+}

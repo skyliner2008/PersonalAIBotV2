@@ -89,6 +89,18 @@ const defaultTools: Omit<ToolMeta, 'declaration'>[] = [
   { name: 'self_view_evolution', displayName: 'Self View Evolution', description: 'ดูประวัติการ evolve และสถานะปัญหา', category: 'system', riskLevel: 'low', platforms: ['all'], tags: ['evolution', 'log', 'history'], enabledByDefault: true },
   { name: 'self_reflect', displayName: 'Self Reflect', description: 'บังคับวิเคราะห์ผลงานตัวเอง', category: 'system', riskLevel: 'medium', platforms: ['all'], tags: ['evolution', 'reflect', 'analyze'], enabledByDefault: true },
   { name: 'self_heal', displayName: 'Self Heal', description: 'ตรวจสอบและซ่อมแซมตัวเองอัตโนมัติ', category: 'system', riskLevel: 'high', platforms: ['all'], tags: ['evolution', 'heal', 'fix'], enabledByDefault: true },
+
+  // Auto-Tool Generation Tools
+  { name: 'create_tool', displayName: 'Create Tool', description: 'สร้างเครื่องมือใหม่ที่ใช้ได้ทันที', category: 'system', riskLevel: 'high', platforms: ['all'], tags: ['evolution', 'tool', 'create', 'dynamic'], enabledByDefault: true },
+  { name: 'list_dynamic_tools', displayName: 'List Dynamic Tools', description: 'แสดงรายการเครื่องมือที่สร้างขึ้นเอง', category: 'system', riskLevel: 'low', platforms: ['all'], tags: ['evolution', 'tool', 'list', 'dynamic'], enabledByDefault: true },
+  { name: 'delete_dynamic_tool', displayName: 'Delete Dynamic Tool', description: 'ลบเครื่องมือที่สร้างขึ้นเอง', category: 'system', riskLevel: 'high', platforms: ['all'], tags: ['evolution', 'tool', 'delete', 'dynamic'], enabledByDefault: true },
+
+  // Swarm Coordination Tools
+  { name: 'delegate_task', displayName: 'Delegate Task', description: 'ส่งมอบงานย่อยให้ specialist ที่เหมาะสม', category: 'communication', riskLevel: 'low', platforms: ['all'], tags: ['swarm', 'delegate', 'specialist'], enabledByDefault: true },
+  { name: 'check_swarm_status', displayName: 'Check Swarm Status', description: 'ตรวจสอบสถานะของระบบ swarm และคิวงาน', category: 'system', riskLevel: 'low', platforms: ['all'], tags: ['swarm', 'status', 'monitoring'], enabledByDefault: true },
+  { name: 'list_specialists', displayName: 'List Specialists', description: 'แสดงรายการ specialist ที่ใช้ได้ในระบบ', category: 'system', riskLevel: 'low', platforms: ['all'], tags: ['swarm', 'specialist', 'list'], enabledByDefault: true },
+  { name: 'add_cli_agent', displayName: 'Add CLI Agent', description: 'เพิ่ม CLI Agent ใหม่แบบอัตโนมัติ', category: 'system', riskLevel: 'high', platforms: ['all'], tags: ['system', 'cli', 'integration', 'admin'], enabledByDefault: true },
+  { name: 'audit_cli_integration', displayName: 'Audit CLI Integration', description: 'ตรวจสอบการเชื่อมต่อของ CLI Agent', category: 'system', riskLevel: 'low', platforms: ['all'], tags: ['system', 'cli', 'audit', 'debug'], enabledByDefault: true },
 ];
 
 // ── Registry API ─────────────────────────────────────

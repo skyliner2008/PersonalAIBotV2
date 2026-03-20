@@ -1,23 +1,48 @@
 import { Agent } from '../bot_agents/agent.js';
 import { getDb, upsertConversation } from '../database/db.js';
+import { createLogger } from '../utils/logger.js';
+import { getIsSleeping } from '../scheduler/subconscious.js';
+
+const log = createLogger('IdleLoop');
+let idleInterval: NodeJS.Timeout | null = null;
+const STARTUP_COMPACT = process.env.STARTUP_COMPACT === '1';
 
 // Configuration for the Idle Loop
 const IDLE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // Check every 1 hour
 const IDLE_THRESHOLD_HOURS = 2; // Consider AI "idle" if no user message in 2 hours
 
+// Flag to prevent concurrent execution of idle loop handler
+let isIdleLoopRunning = false;
+
 export function startIdleLoop(aiAgent: Agent | null) {
     if (!aiAgent) {
-        console.log('[IdleLoop] Disabled: AI Agent is not initialized.');
+        log.warn('Disabled: AI Agent is not initialized.');
         return;
     }
 
-    console.log(`[IdleLoop] Started. Checking for inactivity every ${IDLE_CHECK_INTERVAL_MS / 60000} minutes.`);
+    if (!STARTUP_COMPACT) {
+        log.info(`Started. Checking for inactivity every ${IDLE_CHECK_INTERVAL_MS / 60000} minutes.`);
+    }
 
     setInterval(async () => {
+        // Prevent overlapping executions if async callback takes longer than interval
+        if (isIdleLoopRunning) {
+            log.debug('Still processing from previous interval, skipping');
+            return;
+        }
+        // Skip if subconscious sleep is already running to avoid duplicate work
+        if (getIsSleeping()) {
+            log.debug('Subconscious Sleep is active, skipping idle loop to avoid conflicts');
+            return;
+        }
+
+        isIdleLoopRunning = true;
         try {
             await checkAndTriggerProactiveTask(aiAgent);
         } catch (err: any) {
             console.error('[IdleLoop] Error during proactive task execution:', err.message);
+        } finally {
+            isIdleLoopRunning = false;
         }
     }, IDLE_CHECK_INTERVAL_MS);
 }
@@ -56,7 +81,7 @@ async function checkAndTriggerProactiveTask(aiAgent: Agent) {
     }
 
     if (!isIdle) {
-        console.log(`[IdleLoop] Bot is active. Last user message was ${hoursSinceLastMessage.toFixed(1)} hours ago.`);
+        log.debug(`Bot is active. Last user message was ${hoursSinceLastMessage.toFixed(1)} hours ago.`);
         return;
     }
 

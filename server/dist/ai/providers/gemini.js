@@ -1,9 +1,10 @@
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 export class GeminiProvider {
     id = 'gemini';
     name = 'Google Gemini';
     getKey() {
-        return getSetting('ai_gemini_key') || '';
+        return getProviderApiKey('gemini') || '';
     }
     getModel() {
         return getSetting('ai_gemini_model') || 'gemini-2.0-flash';
@@ -31,15 +32,30 @@ export class GeminiProvider {
         if (systemInstruction) {
             body.systemInstruction = { parts: [{ text: systemInstruction }] };
         }
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        if (!res.ok) {
+        // Try v1beta first, then v1 if model not found (some newer models only work on v1)
+        const apiVersions = ['v1beta', 'v1'];
+        let res;
+        let lastError = '';
+        for (const apiVer of apiVersions) {
+            const url = `https://generativelanguage.googleapis.com/${apiVer}/models/${model}:generateContent?key=${key}`;
+            res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (res.ok)
+                break;
             const err = await res.json().catch(() => ({}));
-            throw new Error(`Gemini error ${res.status}: ${err.error?.message || res.statusText}`);
+            lastError = err.error?.message || res.statusText;
+            // Only retry on 404 NOT_FOUND (model not available on this version)
+            if (res.status === 404 && apiVer !== apiVersions[apiVersions.length - 1]) {
+                console.log(`[Gemini Legacy] Model "${model}" not found on ${apiVer}, trying next API version...`);
+                continue;
+            }
+            throw new Error(`Gemini error ${res.status}: ${lastError}`);
+        }
+        if (!res || !res.ok) {
+            throw new Error(`Gemini error: ${lastError}`);
         }
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
@@ -58,7 +74,8 @@ export class GeminiProvider {
             const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
             return res.ok;
         }
-        catch {
+        catch (e) {
+            console.debug('[Gemini] API validation failed:', String(e));
             return false;
         }
     }

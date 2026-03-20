@@ -1,0 +1,84 @@
+{
+  "claude-cli": {
+    "argsTemplate": [
+      "--print",
+      "{prompt_content}"
+    ],
+    "usesStdin": false,
+    "extraEnv": {
+      "CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK": "1"
+    }
+  },
+  "gemini-cli": {
+    "argsTemplate": [
+      "-p",
+      "{prompt_content}"
+    ],
+    "usesStdin": false
+  },
+  "codex-cli": {
+    "argsTemplate": [
+      "exec",
+      "{prompt_content}"
+    ],
+    "usesStdin": false,
+    "extraEnv": {
+      "CODEX_HOME": ".codex-swarm"
+    }
+  },
+  "aider-cli": {
+    "argsTemplate": [
+      "--message-file",
+      "{tempFile}"
+    ],
+    "usesStdin": false
+  },
+  "ollama-cli": {
+    "argsTemplate": [
+      "run",
+      "llama3.1"
+    ],
+    "usesStdin": true
+  },
+  "llm-cli": {
+    "argsTemplate": [
+      "prompt"
+    ],
+    "usesStdin": true
+  },
+  "kilo-cli": {
+    "argsTemplate": [
+      "run",
+      "--model",
+      "kilo/kilo-auto/free",
+      "{prompt_content}"
+    ],
+    "usesStdin": false
+  },
+  "qwen-cli": {
+    "argsTemplate": [
+      "chat",
+      "{prompt_content}"
+    ],
+    "usesStdin": false
+  },
+  "openai-cli": {
+    "argsTemplate": [
+      "api",
+      "chat.completions.create",
+      "-m",
+      "gpt-4o",
+      "-g",
+      "user",
+      "{prompt_content}"
+    ],
+    "usesStdin": false
+  },
+  "opencode-cli": {
+    "argsTemplate": [
+      "run",
+      "{prompt_content}"
+    ],
+    "usesStdin": false
+  }
+}

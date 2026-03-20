@@ -1,4 +1,6 @@
 import type { CoreMemoryBlock, MemoryMessage, MemoryContext, BuildContextOptions } from './types.js';
+export declare function stopMemoryCleanup(): void;
+export declare function initUnifiedMemory(): Promise<void>;
 export declare function getCoreMemory(chatId: string): CoreMemoryBlock[];
 export declare function setCoreMemory(chatId: string, label: string, value: string): void;
 export declare function formatCoreMemory(blocks: CoreMemoryBlock[]): string;
@@ -13,7 +15,7 @@ export declare function searchArchival(chatId: string, query: string, limit?: nu
 export declare function buildContext(chatId: string, userMessage: string, options?: BuildContextOptions): Promise<MemoryContext>;
 export declare function shouldExtractCore(chatId: string): boolean;
 export declare function shouldExtractArchival(chatId: string): boolean;
-export declare function clearMemory(chatId: string): void;
+export declare function clearMemory(chatId: string): Promise<void>;
 export declare function getMemoryStats(chatId: string): {
     coreBlocks: number;
     workingMessages: number;

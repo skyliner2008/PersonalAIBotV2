@@ -28,3 +28,14 @@ export declare function humanDelay(min?: number, max?: number): Promise<void>;
  */
 export declare function humanType(page: Page, selector: string, text: string): Promise<void>;
 export declare function isRunning(): boolean;
+/**
+ * Navigate with exponential-backoff retry.
+ * Retries up to `maxRetries` times on navigation errors (network blips,
+ * Facebook rate-limit redirects, etc.) before throwing.
+ *
+ * @param page        - Playwright Page
+ * @param url         - URL to navigate to
+ * @param maxRetries  - How many attempts total (default 3)
+ * @param baseDelayMs - Initial wait before first retry in ms (default 1500)
+ */
+export declare function navigateWithRetry(page: Page, url: string, maxRetries?: number, baseDelayMs?: number): Promise<void>;

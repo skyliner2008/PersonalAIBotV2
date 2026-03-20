@@ -28,7 +28,9 @@ export function PostManager() {
     try {
       const data = await api.getPosts();
       setPosts(data);
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load posts:', err);
+    }
   }
 
   async function handleCreate() {
@@ -45,7 +47,9 @@ export function PostManager() {
       setShowForm(false);
       setForm({ content: '', post_type: 'text', target_type: 'profile', target_id: '', media_urls: '', scheduled_at: '', recurring_cron: '', ai_topic: '', ai_style: 'engaging' });
       loadPosts();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to create post:', err);
+    }
   }
 
   async function handleAIGenerate() {
@@ -54,7 +58,9 @@ export function PostManager() {
     try {
       const result = await api.generatePostContent(form.ai_topic, form.ai_style);
       setForm(prev => ({ ...prev, content: result.content }));
-    } catch {}
+    } catch (err) {
+      console.error('Failed to generate post content:', err);
+    }
     setGenerating(false);
   }
 
@@ -63,7 +69,9 @@ export function PostManager() {
     try {
       await api.deletePost(id);
       loadPosts();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to delete post:', err);
+    }
   }
 
   const statusColors: Record<string, string> = {

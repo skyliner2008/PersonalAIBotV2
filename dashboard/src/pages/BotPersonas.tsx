@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
-import { Save, RefreshCw, Eye, EyeOff, Bot, MessageSquare, Send } from 'lucide-react';
+import { Save, RefreshCw, Eye, EyeOff, Bot, MessageSquare, Send, TerminalSquare } from 'lucide-react';
 
-type Platform = 'fb-extension' | 'line' | 'telegram';
+type Platform = 'fb-extension' | 'line' | 'telegram' | 'system';
 
 interface BotPersonaFiles {
   platform: Platform;
@@ -33,6 +33,13 @@ const PLATFORMS: { id: Platform; label: string; icon: any; color: string; desc: 
     icon: Bot,
     color: 'sky',
     desc: 'บอทที่ตอบข้อความผ่าน Telegram',
+  },
+  {
+    id: 'system',
+    label: 'Jarvis Root Admin',
+    icon: TerminalSquare,
+    color: 'violet',
+    desc: 'AI Agent (Jarvis) — ระบบหลักของ Jarvis Terminal ที่ใช้ภายใน Dashboard',
   },
 ];
 
@@ -69,6 +76,7 @@ export function BotPersonas() {
     'fb-extension': null,
     line: null,
     telegram: null,
+    system: null,
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -142,6 +150,7 @@ export function BotPersonas() {
     blue: 'border-blue-500 text-blue-400 bg-blue-500/10',
     green: 'border-green-500 text-green-400 bg-green-500/10',
     sky: 'border-sky-500 text-sky-400 bg-sky-500/10',
+    violet: 'border-violet-500 text-violet-400 bg-violet-500/10',
   };
 
   return (

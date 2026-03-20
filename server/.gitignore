@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.cred-salt
+.cred-secret
+
+# Data
+data/
+
+# Temp/Debug
+output.json
+output2.json
+*.bak
+.aider*

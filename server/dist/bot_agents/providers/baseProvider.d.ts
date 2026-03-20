@@ -1,16 +1,13 @@
-import { Content } from '@google/genai';
+import type { Content, FunctionDeclaration } from '@google/genai';
+import type { ToolCall, TokenUsage } from '../types.js';
 export interface AIResponse {
     text: string;
-    toolCalls?: any[];
+    toolCalls?: ToolCall[];
     /** Raw model Content object (with functionCall parts) — used by Gemini agentic loop */
     rawModelContent?: Content;
-    usage?: {
-        promptTokens: number;
-        completionTokens: number;
-        totalTokens: number;
-    };
+    usage?: TokenUsage;
 }
 export interface AIProvider {
-    generateResponse(modelName: string, systemInstruction: string, contents: Content[], tools?: any[], useGoogleSearch?: boolean): Promise<AIResponse>;
+    generateResponse(modelName: string, systemInstruction: string, contents: Content[], tools?: FunctionDeclaration[], useGoogleSearch?: boolean): Promise<AIResponse>;
     listModels(): Promise<string[]>;
 }

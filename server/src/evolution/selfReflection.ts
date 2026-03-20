@@ -2,17 +2,29 @@
 // Self-Reflection Engine — AI วิเคราะห์ตัวเองอัตโนมัติ
 // ============================================================
 // ทำงานทุก N ข้อความ: วิเคราะห์ error patterns, performance,
-// tool usage แล้วสร้าง insights + auto-actions
+// tool usage, model performance แล้วสร้าง insights + auto-actions
 
-import { getAgentRunHistory, getAgentStats, type AgentRun } from '../bot_agents/agent.js';
+import { getAgentRunHistory, getAgentStats, type AgentRun } from '../bot_agents/agentTelemetry.js';
 import { addLearning, logEvolution, type LearningCategory } from './learningJournal.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('SelfReflection');
 
 // Trigger reflection every N completed runs
-const REFLECTION_INTERVAL = 50;
+const REFLECTION_INTERVAL = 25;  // ลดจาก 50 → 25 ให้เรียนรู้เร็วขึ้น 2 เท่า
 let lastReflectionAt = 0;
+
+// Load lastReflectionAt from DB on startup
+export async function initSelfReflection(): Promise<void> {
+  try {
+      const { getDb } = await import('../database/db.js');
+      const row = getDb().prepare("SELECT value FROM settings WHERE key = 'lastReflectionAt'").get() as any;
+      if (row?.value) lastReflectionAt = parseInt(row.value, 10) || 0;
+      log.debug('Self-reflection engine initialized', { lastReflectionAt });
+  } catch (e) { 
+    log.warn('Failed to initialize SelfReflection session', { error: String(e) });
+  }
+}
 
 export interface ReflectionReport {
     findings: string[];
@@ -47,6 +59,12 @@ export async function triggerReflection(
 
     if (runs.length < 5) return null;
     lastReflectionAt = stats.totalRuns;
+    // Persist to DB so it survives restart
+    try {
+        const { getDb } = await import('../database/db.js');
+        getDb().prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastReflectionAt', ?)")
+            .run(String(lastReflectionAt));
+    } catch (err) { log.debug('Failed to persist reflection timestamp', { error: String(err) }); }
 
     const report: ReflectionReport = {
         findings: [],
@@ -64,6 +82,9 @@ export async function triggerReflection(
 
         // ── 3. Tool Usage Analysis ──
         analyzeToolUsage(runs, report);
+
+        // ── 3.5. Model Performance Analysis (auto-tune routing) ──
+        analyzeModelPerformance(runs, report);
 
         // ── 4. LLM-Powered Deep Analysis (optional) ──
         if (llmCall && runs.length >= 10) {
@@ -245,9 +266,63 @@ function executeAutoActions(report: ReflectionReport): void {
             } else if (action.type === 'log_warning') {
                 log.warn(action.description);
                 action.applied = true;
+            } else if (action.type === 'tune_config') {
+                // Auto-tune model routing based on performance data
+                try {
+                    const { invalidatePerformanceCache } = require('../bot_agents/config/aiConfig.js');
+                    invalidatePerformanceCache();
+                    log.info(`Auto-tune applied: ${action.description}`);
+                    action.applied = true;
+                } catch (err) {
+                    log.warn('Auto-action apply failed', { action: action.description, error: String(err) });
+                    action.applied = false;
+                }
             }
-        } catch {
+        } catch (err) {
+            log.warn('Auto-action execution error', { error: String(err) });
             action.applied = false;
+        }
+    }
+}
+
+// ── Model Performance Analysis (Phase 5: auto-tune routing) ──
+
+function analyzeModelPerformance(runs: AgentRun[], report: ReflectionReport): void {
+    // Group runs by model + taskType to find best performers
+    const modelStats: Record<string, {
+        model: string; taskType: string;
+        totalRuns: number; successRuns: number; totalDurationMs: number;
+    }> = {};
+
+    for (const run of runs) {
+        if (!run.endTime || !run.taskType) continue;
+        // Extract model from the run (approximate from reply metadata if available)
+        const key = `${run.taskType}`;
+        if (!modelStats[key]) {
+            modelStats[key] = { model: 'unknown', taskType: run.taskType, totalRuns: 0, successRuns: 0, totalDurationMs: 0 };
+        }
+        modelStats[key].totalRuns++;
+        if (!run.error) modelStats[key].successRuns++;
+        modelStats[key].totalDurationMs += run.durationMs || 0;
+    }
+
+    // Find task types with consistently slow performance
+    for (const [key, stats] of Object.entries(modelStats)) {
+        if (stats.totalRuns < 5) continue;
+        const avgMs = Math.round(stats.totalDurationMs / stats.totalRuns);
+        const successRate = stats.successRuns / stats.totalRuns;
+
+        if (avgMs > 20000 && successRate < 0.8) {
+            report.findings.push(`⚡ Task "${stats.taskType}" avg ${avgMs}ms, success ${(successRate * 100).toFixed(0)}% — ควรเปลี่ยน model`);
+            report.autoActions.push({
+                type: 'tune_config',
+                description: `Task ${stats.taskType} needs faster model (current avg: ${avgMs}ms, success: ${(successRate * 100).toFixed(0)}%)`,
+                applied: false,
+            });
+        }
+
+        if (successRate >= 0.95 && avgMs < 5000 && stats.totalRuns >= 10) {
+            report.findings.push(`🌟 Task "${stats.taskType}" ยอดเยี่ยม: avg ${avgMs}ms, success ${(successRate * 100).toFixed(0)}%`);
         }
     }
 }

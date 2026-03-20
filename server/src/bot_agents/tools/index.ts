@@ -1,6 +1,6 @@
 import { Type } from '@google/genai';
 import type { FunctionDeclaration } from '@google/genai';
-import type { BotContext, ToolHandler, ToolHandlerMap, NgrokApiResponse } from '../types.js';
+import type { BotContext, ToolHandlerMap, NgrokApiResponse } from '../types.js';
 import {
   runCommand, runCommandDeclaration,
   openApplication, openApplicationDeclaration,
@@ -11,18 +11,26 @@ import {
   clipboardRead, clipboardReadDeclaration,
   clipboardWrite, clipboardWriteDeclaration,
 } from './os.js';
-import { listFiles, listFilesDeclaration, readFileContent, readFileContentDeclaration, writeFileContent, writeFileContentDeclaration, deleteFile, deleteFileDeclaration } from './file.js';
+import { listFiles, listFilesDeclaration, readFileContent, readFileContentDeclaration, writeFileContent, writeFileContentDeclaration, deleteFile, deleteFileDeclaration, replaceCodeBlock, replaceCodeBlockDeclaration } from './file.js';
 import { browserNavigate, browserNavigateDeclaration, browserClick, browserClickDeclaration, browserType, browserTypeDeclaration, browserClose, browserCloseDeclaration } from './browser.js';
 import { webSearch, webSearchDeclaration, readWebpage, readWebpageDeclaration, mouseClick, mouseClickDeclaration, keyboardType, keyboardTypeDeclaration } from './limitless.js';
 import { systemToolDeclarations, getSystemToolHandlers, type SystemToolContext } from './system.js';
 import { evolutionToolDeclarations, getEvolutionToolHandlers } from './evolution.js';
+import { loadDynamicTools, getDynamicToolDeclarations, getDynamicToolHandlers, refreshDynamicTools } from './dynamicTools.js';
+import { swarmToolDeclarations, getSwarmToolHandlers } from '../../swarm/swarmTools.js';
+import { planningToolDeclarations, getPlanningToolHandlers } from './planning.js';
+import { uiToolDeclarations, getUiToolHandlers } from './ui.js';
+import { addCliAgent, addCliAgentDeclaration } from './cli_management.js';
+import { createLogger } from '../../utils/logger.js';
 
 export type { BotContext, SystemToolContext };
+
+const logger = createLogger('Tools');
 
 // Utility Tools
 const getCurrentTimeDeclaration: FunctionDeclaration = {
   name: "get_current_time",
-  description: "บอกเวลาปัจจุบันของระบบ เพื่อช่วยจัดตารางงาน",
+  description: "บอกเวลาปัจจุบันของระบบ เพื่อช่วยจัดตารางงานหรืออ้างอิงเวลา",
   parameters: { type: Type.OBJECT, properties: {} },
 };
 
@@ -32,7 +40,7 @@ function getCurrentTime() {
 
 const echoMessageDeclaration: FunctionDeclaration = {
   name: "echo_message",
-  description: "พิมพ์ข้อความออกทางหน้าจอ Console ของเครื่องที่รันบอทอยู่",
+  description: "พิมพ์ข้อความออกทางหน้าจอ Console ของเครื่องที่รันบอทอยู่ (ใช้ debug หรือแจ้งเตือนฝั่ง server)",
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -43,7 +51,7 @@ const echoMessageDeclaration: FunctionDeclaration = {
 };
 
 function echoMessage({ message }: { message: string }) {
-  console.log(`🤖 [AI SAY]: ${message}`);
+  logger.info(`🤖 [AI SAY]: ${message}`);
   return "พิมพ์ข้อความสำเร็จแล้ว";
 }
 
@@ -127,10 +135,10 @@ export const createSendFileHandler = (ctx: BotContext) => {
 };
 
 // ==========================================
-// Memory Management Tools (ให้ AI จัดการ memory ได้เอง)
+// Memory Management Tools
 // ==========================================
 import {
-  searchArchival, saveArchivalFact, searchRecall
+  searchArchival, saveArchivalFact
 } from '../../memory/unifiedMemory.js';
 
 export const memorySearchDeclaration: FunctionDeclaration = {
@@ -147,7 +155,7 @@ export const memorySearchDeclaration: FunctionDeclaration = {
 
 export const memorySaveDeclaration: FunctionDeclaration = {
   name: "memory_save",
-  description: "บันทึกข้อเท็จจริงใหม่เกี่ยวกับผู้ใช้ลงในความทรงจำระยะยาว ใช้เมื่อผู้ใช้บอกข้อมูลเกี่ยวกับตัวเอง เช่น ชื่อ อาชีพ ความชอบ",
+  description: "บันทึกข้อเท็จจริงใหม่เกี่ยวกับผู้ใช้ลงในความทรงจำระยะยาว ใช้เมื่อผู้ใช้บอกข้อมูลเกี่ยวกับตนเอง เช่น ชื่อ อาชีพ ความชอบ",
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -156,6 +164,19 @@ export const memorySaveDeclaration: FunctionDeclaration = {
     required: ["fact"],
   },
 };
+
+// Initialize function to load dynamic tools at startup
+let dynamicToolsLoaded = false;
+
+async function initializeToolsAsync() {
+  if (!dynamicToolsLoaded) {
+    await loadDynamicTools();
+    dynamicToolsLoaded = true;
+  }
+}
+
+// Call initialization (non-blocking)
+initializeToolsAsync().catch(err => console.error('Failed to load dynamic tools:', err));
 
 export const tools = [
   // Utility
@@ -175,6 +196,7 @@ export const tools = [
   readFileContentDeclaration,
   writeFileContentDeclaration,
   deleteFileDeclaration,
+  replaceCodeBlockDeclaration,
   sendFileToChatDeclaration,
   // Browser Tools
   browserNavigateDeclaration,
@@ -193,18 +215,32 @@ export const tools = [
   ...systemToolDeclarations,
   // Self-Evolution Tools
   ...evolutionToolDeclarations,
+  // Swarm Coordination Tools
+  ...swarmToolDeclarations,
+  // Stateful Planning Tools
+  ...planningToolDeclarations,
+  // Generative UI Tools
+  ...uiToolDeclarations,
+  // CLI Management Tools
+  addCliAgentDeclaration,
 ];
 
-// Per-request chatId holder — set by the handler wrapper
-let _currentChatId = '';
+/**
+ * Get all tools including dynamic ones
+ */
+export function getAllTools(): FunctionDeclaration[] {
+  return [...tools, ...getDynamicToolDeclarations()];
+}
 
-export const getFunctionHandlers = (ctx: BotContext, sysCtx?: SystemToolContext): ToolHandlerMap => {
+export const getFunctionHandlers = (ctx: BotContext, sysCtx?: SystemToolContext, chatId?: string): ToolHandlerMap => {
+  const effectiveChatId = chatId || 'system_fallback';
+
   const handlers: ToolHandlerMap = {
     // Utility
     get_current_time: getCurrentTime,
     echo_message: echoMessage,
     // OS Control
-    run_command: runCommand,
+    run_command: (args) => runCommand(args as { command: string }, { chatId: effectiveChatId }),
     run_python: runPython,
     open_application: openApplication,
     close_application: closeApplication,
@@ -217,6 +253,7 @@ export const getFunctionHandlers = (ctx: BotContext, sysCtx?: SystemToolContext)
     read_file_content: readFileContent,
     write_file_content: writeFileContent,
     delete_file: deleteFile,
+    replace_code_block: replaceCodeBlock,
     send_file_to_chat: createSendFileHandler(ctx),
     // Browser
     browser_navigate: browserNavigate,
@@ -231,27 +268,36 @@ export const getFunctionHandlers = (ctx: BotContext, sysCtx?: SystemToolContext)
     // Memory Management
     memory_search: async (args) => {
       const query = String(args.query ?? '');
-      const facts = await searchArchival(_currentChatId, query, 5, 0.5);
+      const facts = await searchArchival(effectiveChatId, query, 5, 0.55);
       if (facts.length === 0) return '🧠 ไม่พบข้อมูลที่เกี่ยวข้องในความทรงจำ';
       return `🧠 ข้อมูลที่พบ:\n${facts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
     },
     memory_save: async (args) => {
       const fact = String(args.fact ?? '');
-      await saveArchivalFact(_currentChatId, fact);
+      await saveArchivalFact(effectiveChatId, fact);
       return `✅ บันทึกลงความทรงจำแล้ว: "${fact}"`;
     },
   };
 
-  // Register System Self-Awareness tools (if context provided)
+  // Register System Self-Awareness tools
   if (sysCtx) {
     Object.assign(handlers, getSystemToolHandlers(sysCtx));
   }
-
-  // Register Self-Evolution tools
   Object.assign(handlers, getEvolutionToolHandlers());
+  Object.assign(handlers, getSwarmToolHandlers(ctx));
+  Object.assign(handlers, getPlanningToolHandlers(effectiveChatId));
+  Object.assign(handlers, getUiToolHandlers(effectiveChatId));
+  handlers.add_cli_agent = addCliAgent;
+  Object.assign(handlers, getDynamicToolHandlers());
 
   return handlers;
 };
 
-/** Set the current chatId for memory tools — called by agent before tool execution */
-export function setCurrentChatId(chatId: string) { _currentChatId = chatId; }
+export async function refreshDynamicToolsRegistry(): Promise<void> {
+  await refreshDynamicTools();
+}
+
+/** @deprecated Legacy */
+export function setCurrentChatId(_chatId: string) {}
+/** @deprecated Legacy */
+export function getCurrentChatId() { return ''; }

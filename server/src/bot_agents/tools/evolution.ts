@@ -183,12 +183,16 @@ export const selfAddLearningDeclaration: FunctionDeclaration = {
 export async function selfAddLearning(
     { category, insight }: { category: string; insight: string }
 ): Promise<string> {
-    const validCategories = ['user_patterns', 'tool_usage', 'error_solutions', 'prompt_improvements', 'performance', 'general'];
-    if (!validCategories.includes(category)) {
-        return `❌ category ไม่ถูกต้อง ต้องเป็น: ${validCategories.join(', ')}`;
+    try {
+        const validCategories = ['user_patterns', 'tool_usage', 'error_solutions', 'prompt_improvements', 'performance', 'general'];
+        if (!validCategories.includes(category)) {
+            return `❌ category ไม่ถูกต้อง ต้องเป็น: ${validCategories.join(', ')}`;
+        }
+        addLearning(category as LearningCategory, insight, 'self_tool', 0.6);
+        return `✅ บันทึกการเรียนรู้แล้ว: [${category}] ${insight}`;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
     }
-    addLearning(category as LearningCategory, insight, 'self_tool', 0.6);
-    return `✅ บันทึกการเรียนรู้แล้ว: [${category}] ${insight}`;
 }
 
 // ============================================================
@@ -216,27 +220,31 @@ export const selfViewEvolutionDeclaration: FunctionDeclaration = {
 export async function selfViewEvolution(
     { view_type, limit }: { view_type?: string; limit?: number }
 ): Promise<string> {
-    const n = limit || 10;
+    try {
+        const n = limit || 10;
 
-    switch (view_type) {
-        case 'learnings': {
-            const learnings = getLearnings(undefined, n);
-            if (learnings.length === 0) return '📓 ยังไม่มี learnings ที่บันทึก';
-            return `📓 Learning Journal (${learnings.length} entries):\n` +
-                learnings.map((l, i) => `${i + 1}. [${l.category}] ${l.insight} (confidence: ${l.confidence}, used: ${l.times_applied}x)`).join('\n');
+        switch (view_type) {
+            case 'learnings': {
+                const learnings = getLearnings(undefined, n);
+                if (learnings.length === 0) return '📓 ยังไม่มี learnings ที่บันทึก';
+                return `📓 Learning Journal (${learnings.length} entries):\n` +
+                    learnings.map((l, i) => `${i + 1}. [${l.category}] ${l.insight} (confidence: ${l.confidence}, used: ${l.times_applied}x)`).join('\n');
+            }
+            case 'health': {
+                const result = runHealthCheck();
+                if (result.issues.length === 0) return '✅ Health check passed — ไม่พบปัญหา';
+                return `🏥 Health Check: ${result.issues.length} issues found, ${result.fixed} fixed\n` +
+                    result.issues.map(i => `  ${i.severity === 'high' ? '🔴' : '🟡'} [${i.type}] ${i.description}`).join('\n');
+            }
+            default: {
+                const logs = getEvolutionLog(n);
+                if (logs.length === 0) return '📋 ยังไม่มี evolution log';
+                return `📋 Evolution Log (${logs.length} entries):\n` +
+                    logs.map((l: any, i: number) => `${i + 1}. [${l.action_type}] ${l.description} (${l.created_at})`).join('\n');
+            }
         }
-        case 'health': {
-            const result = runHealthCheck();
-            if (result.issues.length === 0) return '✅ Health check passed — ไม่พบปัญหา';
-            return `🏥 Health Check: ${result.issues.length} issues found, ${result.fixed} fixed\n` +
-                result.issues.map(i => `  ${i.severity === 'high' ? '🔴' : '🟡'} [${i.type}] ${i.description}`).join('\n');
-        }
-        default: {
-            const logs = getEvolutionLog(n);
-            if (logs.length === 0) return '📋 ยังไม่มี evolution log';
-            return `📋 Evolution Log (${logs.length} entries):\n` +
-                logs.map((l: any, i: number) => `${i + 1}. [${l.action_type}] ${l.description} (${l.created_at})`).join('\n');
-        }
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
     }
 }
 
@@ -251,16 +259,20 @@ export const selfReflectDeclaration: FunctionDeclaration = {
 };
 
 export async function selfReflect(): Promise<string> {
-    const report = await triggerReflection();
-    if (!report) return '📊 ข้อมูลไม่เพียงพอสำหรับการวิเคราะห์ (ต้องมี >= 5 runs)';
+    try {
+        const report = await triggerReflection();
+        if (!report) return '📊 ข้อมูลไม่เพียงพอสำหรับการวิเคราะห์ (ต้องมี >= 5 runs)';
 
-    let output = `🧠 Self-Reflection Report:\n\n`;
-    output += `📋 Findings (${report.findings.length}):\n`;
-    output += report.findings.map(f => `  ${f}`).join('\n');
-    output += `\n\n💡 Suggestions (${report.suggestions.length}):\n`;
-    output += report.suggestions.map(s => `  • ${s}`).join('\n');
-    output += `\n\n⚡ Auto-Actions: ${report.autoActions.filter(a => a.applied).length}/${report.autoActions.length} applied`;
-    return output;
+        let output = `🧠 Self-Reflection Report:\n\n`;
+        output += `📋 Findings (${report.findings.length}):\n`;
+        output += report.findings.map(f => `  ${f}`).join('\n');
+        output += `\n\n💡 Suggestions (${report.suggestions.length}):\n`;
+        output += report.suggestions.map(s => `  • ${s}`).join('\n');
+        output += `\n\n⚡ Auto-Actions: ${report.autoActions.filter(a => a.applied).length}/${report.autoActions.length} applied`;
+        return output;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
+    }
 }
 
 // ============================================================
@@ -274,18 +286,165 @@ export const selfHealDeclaration: FunctionDeclaration = {
 };
 
 export async function selfHeal(): Promise<string> {
-    const result = runHealthCheck();
-    if (result.issues.length === 0) {
-        return '✅ ระบบสุขภาพดี — ไม่พบปัญหาที่ต้องแก้ไข';
-    }
+    try {
+        const result = runHealthCheck();
+        if (result.issues.length === 0) {
+            return '✅ ระบบสุขภาพดี — ไม่พบปัญหาที่ต้องแก้ไข';
+        }
 
-    let output = `🔧 Self-Healing Report:\n`;
-    output += `Issues: ${result.issues.length} | Fixed: ${result.fixed} | Skipped: ${result.skipped}\n\n`;
-    for (const issue of result.issues) {
-        const icon = issue.severity === 'high' ? '🔴' : issue.severity === 'medium' ? '🟡' : '🟢';
-        output += `${icon} ${issue.description}\n  → ${issue.suggestedFix}\n`;
+        let output = `🔧 Self-Healing Report:\n`;
+        output += `Issues: ${result.issues.length} | Fixed: ${result.fixed} | Skipped: ${result.skipped}\n\n`;
+        for (const issue of result.issues) {
+            const icon = issue.severity === 'high' ? '🔴' : issue.severity === 'medium' ? '🟡' : '🟢';
+            output += `${icon} ${issue.description}\n  → ${issue.suggestedFix}\n`;
+        }
+        return output;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
     }
-    return output;
+}
+
+// ============================================================
+// Tool 7: create_tool — Create new dynamic tools
+// ============================================================
+
+import { registerDynamicTool, unregisterDynamicTool, listDynamicTools, getDynamicTool } from './dynamicTools.js';
+
+export const createToolDeclaration: FunctionDeclaration = {
+    name: 'create_tool',
+    description: 'สร้างเครื่องมือใหม่ที่ฉันสามารถใช้ได้ ให้ระบุชื่อ, คำอธิบาย, schema ของ parameter, และ code implementation',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            name: {
+                type: Type.STRING,
+                description: 'ชื่อเครื่องมือ (kebab-case, เช่น fetch-weather, convert-units)',
+            },
+            description: {
+                type: Type.STRING,
+                description: 'คำอธิบายว่าเครื่องมือนี้ทำอะไร',
+            },
+            parameters: {
+                type: Type.OBJECT,
+                description: 'JSON Schema สำหรับ parameter ของเครื่องมือ (ใช้ type object)',
+            },
+            code: {
+                type: Type.STRING,
+                description: 'TypeScript/JavaScript code สำหรับ handler ฟังก์ชัน (async function body, return ผลลัพธ์เป็น string)',
+            },
+        },
+        required: ['name', 'description', 'code'],
+    },
+};
+
+export async function createTool({
+    name,
+    description,
+    code,
+    parameters,
+}: {
+    name: string;
+    description: string;
+    code: string;
+    parameters?: Record<string, unknown>;
+}): Promise<string> {
+    try {
+        const result = await registerDynamicTool(name, description, code, parameters);
+
+        if (!result.valid) {
+            let errorMsg = `❌ ไม่สามารถสร้างเครื่องมือได้:\n`;
+            errorMsg += result.errors.map((e) => `  • ${e}`).join('\n');
+            if (result.warnings.length > 0) {
+                errorMsg += `\n\n⚠️ Warnings:\n`;
+                errorMsg += result.warnings.map((w) => `  • ${w}`).join('\n');
+            }
+            return errorMsg;
+        }
+
+        let successMsg = `✅ สร้างเครื่องมือ '${name}' สำเร็จแล้ว!`;
+        if (result.warnings.length > 0) {
+            successMsg += `\n\n⚠️ Warnings:\n`;
+            successMsg += result.warnings.map((w) => `  • ${w}`).join('\n');
+        }
+        return successMsg;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
+    }
+}
+
+// ============================================================
+// Tool 8: list_dynamic_tools — List all custom tools
+// ============================================================
+
+export const listDynamicToolsDeclaration: FunctionDeclaration = {
+    name: 'list_dynamic_tools',
+    description: 'แสดงรายการเครื่องมือที่เราสร้างขึ้นเองทั้งหมด',
+    parameters: { type: Type.OBJECT, properties: {} },
+};
+
+export async function listDynamicToolsHandler(): Promise<string> {
+    try {
+        const tools = listDynamicTools();
+        if (tools.length === 0) {
+            return '📋 ยังไม่มีเครื่องมือที่สร้างขึ้นเอง';
+        }
+
+        let output = `📋 Custom Tools (${tools.length}):\n\n`;
+        for (const tool of tools) {
+            output += `• ${tool.name}\n`;
+            output += `  ${tool.description}\n`;
+            if (tool.parameters) {
+                const hasProperties = (tool.parameters as any).properties;
+                if (hasProperties) {
+                    const paramList = Object.keys(hasProperties)
+                        .map((p) => `${p}`)
+                        .join(', ');
+                    output += `  Parameters: ${paramList}\n`;
+                }
+            }
+            output += '\n';
+        }
+        return output;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
+    }
+}
+
+// ============================================================
+// Tool 9: delete_dynamic_tool — Delete a custom tool
+// ============================================================
+
+export const deleteDynamicToolDeclaration: FunctionDeclaration = {
+    name: 'delete_dynamic_tool',
+    description: 'ลบเครื่องมือที่สร้างขึ้นเอง (ไม่สามารถคืนได้)',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            name: {
+                type: Type.STRING,
+                description: 'ชื่อของเครื่องมือที่ต้องการลบ',
+            },
+        },
+        required: ['name'],
+    },
+};
+
+export async function deleteDynamicTool({ name }: { name: string }): Promise<string> {
+    try {
+        const tool = getDynamicTool(name);
+        if (!tool) {
+            return `❌ ไม่พบเครื่องมือ: ${name}`;
+        }
+
+        const result = await unregisterDynamicTool(name);
+        if (!result.success) {
+            return `❌ ไม่สามารถลบเครื่องมือได้: ${result.error}`;
+        }
+
+        return `✅ ลบเครื่องมือ '${name}' สำเร็จแล้ว`;
+    } catch (err: any) {
+        return `❌ Error: ${err.message}`;
+    }
 }
 
 // ============================================================
@@ -299,6 +458,9 @@ export const evolutionToolDeclarations: FunctionDeclaration[] = [
     selfViewEvolutionDeclaration,
     selfReflectDeclaration,
     selfHealDeclaration,
+    createToolDeclaration,
+    listDynamicToolsDeclaration,
+    deleteDynamicToolDeclaration,
 ];
 
 export function getEvolutionToolHandlers(): Record<string, (args: any) => Promise<string>> {
@@ -309,5 +471,8 @@ export function getEvolutionToolHandlers(): Record<string, (args: any) => Promis
         self_view_evolution: selfViewEvolution,
         self_reflect: selfReflect,
         self_heal: selfHeal,
+        create_tool: createTool,
+        list_dynamic_tools: listDynamicToolsHandler,
+        delete_dynamic_tool: deleteDynamicTool,
     };
 }

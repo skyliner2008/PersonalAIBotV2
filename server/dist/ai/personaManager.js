@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-export const PLATFORMS = ['fb-extension', 'line', 'telegram'];
+export const PLATFORMS = ['fb-extension', 'line', 'telegram', 'system'];
 // Default content per file
 const DEFAULTS = {
     'AGENTS.md': `# Role\nคุณคือผู้ช่วย AI ส่วนตัว (Personal AI Assistant)\n\n# Goal\nเป้าหมายของคุณคือการช่วยเหลือผู้ใช้งานอย่างเต็มที่และถูกต้องที่สุด\n`,
@@ -81,7 +81,9 @@ class PersonaManager {
             .split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('//'))
-            .map(line => line.replace(/[`*\-]/g, '').trim())
+            // Strip markdown decorators (backticks/asterisks) from edges only — NOT hyphens,
+            // because tool names like "web-search" legitimately contain hyphens.
+            .map(line => line.replace(/^[`*\s]+|[`*\s]+$/g, '').trim())
             .filter(Boolean);
         const config = { systemInstruction, enabledTools };
         this.cache.set(platform, { config, lastLoaded: now });

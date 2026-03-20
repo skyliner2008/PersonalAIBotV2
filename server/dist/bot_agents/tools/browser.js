@@ -1,5 +1,7 @@
 import { chromium } from 'playwright';
 import { Type } from '@google/genai';
+import { createLogger } from '../../utils/logger.js';
+const logger = createLogger('browser-tool');
 let browser = null;
 let context = null;
 let page = null;
@@ -45,7 +47,9 @@ async function cleanupBrowser() {
         if (browser)
             await browser.close();
     }
-    catch (e) { }
+    catch (e) {
+        console.debug('[Browser] cleanup:', String(e));
+    }
     browser = null;
     context = null;
     page = null;
@@ -70,7 +74,7 @@ export const browserNavigateDeclaration = {
 export async function browserNavigate({ url }) {
     try {
         const p = await getPage();
-        console.log(`[Browser] Navigating to: ${url}`);
+        logger.info(`Navigating to: ${url}`);
         // เปลี่ยนมาใช้ 'domcontentloaded' เพื่อความเร็ว และป้องกัน Timeout จากโฆษณา
         await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
         // รอสัก 3 วินาทีเพื่อให้ JavaScript รันและแสดงราคา (แทนการรอ networkidle)

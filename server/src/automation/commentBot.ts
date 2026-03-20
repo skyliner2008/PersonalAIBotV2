@@ -4,7 +4,10 @@ import { addLog, dbAll, dbGet, dbRun } from '../database/db.js';
 import { aiChat } from '../ai/aiRouter.js';
 import { buildCommentReplyPrompt } from '../ai/prompts/contentCreator.js';
 import type { Server as SocketServer } from 'socket.io';
+import { getCommentReplyDelayMs } from '../config/runtimeSettings.js';
+import { createLogger } from '../utils/logger.js';
 
+const logger = createLogger('CommentBot');
 let isMonitoring = false;
 let pollInterval: NodeJS.Timeout | null = null;
 
@@ -141,7 +144,9 @@ async function checkWatchedPosts(io: SocketServer): Promise<void> {
               'success'
             );
 
-            await humanDelay(5000, 15000);
+            const minDelay = getCommentReplyDelayMs();
+            const maxDelay = Math.max(minDelay, minDelay * 3);
+            await humanDelay(minDelay, maxDelay);
           }
         }
       }
@@ -153,7 +158,7 @@ async function checkWatchedPosts(io: SocketServer): Promise<void> {
       addLog('commentbot', `Error checking post ${watch.id}`, msg, 'error');
     } finally {
       if (page) {
-        try { if (!page.isClosed()) await page.close(); } catch {}
+        try { if (!page.isClosed()) await page.close(); } catch (e) { console.debug('[CommentBot] page close:', String(e)); }
       }
     }
   }

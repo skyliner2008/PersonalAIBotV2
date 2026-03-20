@@ -1,0 +1,15 @@
+{
+  "name": "audit_cli_integration",
+  "description": "Checks if a CLI agent is properly integrated across all system layers (Discovery, Messaging, Swarm, Voice).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cliName": {
+        "type": "string",
+        "description": "The name of the CLI to audit (e.g., 'opencode')."
+      }
+    },
+    "required": ["cliName"]
+  },
+  "code": "const fs = require('fs');\nconst path = require('path');\n\nconst rootDir = path.resolve(__dirname, '../../../');\nconst results = [];\nconst cli = args.cliName.toLowerCase();\n\nfunction checkFile(filePath, pattern, label) {\n  const fullPath = path.join(rootDir, filePath);\n  if (!fs.existsSync(fullPath)) return results.push(`❌ ${label}: File not found (${filePath})`);\n  const content = fs.readFileSync(fullPath, 'utf8');\n  if (content.toLowerCase().includes(cli)) {\n    results.push(`✅ ${label}: Found ${cli} in ${filePath}`);\n  } else {\n    results.push(`⚠️ ${label}: NOT found in ${filePath}`);\n  }\n}\n\n// 1. Discovery\ncheckFile('server/src/terminal/commandRouter.ts', cli, 'Discovery Candidate');\n\n// 2. Messaging Bridge\ncheckFile('server/src/terminal/messagingBridge.ts', cli, 'Messaging Bridge (@summon)');\n\n// 3. Swarm Profile\nconst profilePath = path.join(rootDir, 'config/cli_profiles.json');\nif (fs.existsSync(profilePath)) {\n  const profiles = JSON.parse(fs.readFileSync(profilePath, 'utf8'));\n  if (profiles[cli + '-cli'] || profiles[cli]) {\n    results.push(`✅ Swarm Profile: Found in cli_profiles.json`);\n  } else {\n    results.push(`⚠️ Swarm Profile: NOT found in cli_profiles.json`);\n  }\n} else {\n  checkFile('server/src/swarm/cliProfileManager.ts', cli, 'Swarm Profile (Source)');\n}\n\n// 4. Voice Session\ncheckFile('server/src/api/socketHandlers.ts', cli, 'Voice Session (Socket)');\ncheckFile('server/src/api/meetingRoom.ts', cli, 'Meeting Room (Orchestrator)');\n\nreturn results.join('\\n');"
+}

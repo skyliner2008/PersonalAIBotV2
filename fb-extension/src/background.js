@@ -18,6 +18,12 @@ let cachedModel = null;
 let settingsCacheTime = 0;
 const SETTINGS_CACHE_TTL = 60000; // 1 minute
 
+// ---- Token write lock (race condition prevention) ----
+let tokenWriteLock = false;
+
+// ---- Message processing queue per conversation ----
+const messageProcessingQueues = new Map(); // convId -> Promise
+
 function addExtLog(level, source, msg) {
   extLogs.push({ time: new Date().toISOString(), level, source, msg });
   if (extLogs.length > MAX_EXT_LOGS) extLogs.shift();
@@ -26,20 +32,78 @@ function addExtLog(level, source, msg) {
 // ---- Open Side Panel on icon click ----
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { });
 
-// ---- Server API helper ----
+// ---- Circuit breaker state ----
+let apiConsecutiveFailures = 0;
+let apiCircuitBreakerTime = 0;
+const API_CIRCUIT_BREAKER_DELAY = 30000; // 30 seconds
+const API_MAX_CONSECUTIVE_FAILURES = 3;
+
+// ---- Server API helper with retry & circuit breaker ----
 async function api(path, options = {}) {
-  try {
-    const res = await fetch(`${SERVER_URL}/api${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(60000), // Increased from 15s to 60s for slow thinking models
-      ...options,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (e) {
-    addExtLog('error', 'BG', `API ${path} failed: ${e.message}`);
-    return null;
+  // Check circuit breaker
+  if (apiCircuitBreakerTime && Date.now() < apiCircuitBreakerTime) {
+    const remaining = Math.ceil((apiCircuitBreakerTime - Date.now()) / 1000);
+    const msg = `Circuit breaker active for ${remaining}s`;
+    addExtLog('warn', 'BG', `API ${path}: ${msg}`);
+    return { error: msg };
   }
+
+  const maxRetries = 2;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(`${SERVER_URL}/api${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(60000),
+        ...options,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Reset circuit breaker on success
+        apiConsecutiveFailures = 0;
+        apiCircuitBreakerTime = 0;
+        return data;
+      }
+
+      // Don't retry client errors (4xx)
+      if (res.status >= 400 && res.status < 500) {
+        apiConsecutiveFailures++;
+        if (apiConsecutiveFailures >= API_MAX_CONSECUTIVE_FAILURES) {
+          apiCircuitBreakerTime = Date.now() + API_CIRCUIT_BREAKER_DELAY;
+        }
+        const error = `HTTP ${res.status}`;
+        addExtLog('error', 'BG', `API ${path}: ${error}`);
+        return { error };
+      }
+
+      // Retry server errors (5xx)
+      lastError = `HTTP ${res.status}`;
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000; // exponential backoff: 1s, 2s
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+    } catch (e) {
+      lastError = e.message;
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000;
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+    }
+  }
+
+  // All retries exhausted
+  apiConsecutiveFailures++;
+  if (apiConsecutiveFailures >= API_MAX_CONSECUTIVE_FAILURES) {
+    apiCircuitBreakerTime = Date.now() + API_CIRCUIT_BREAKER_DELAY;
+  }
+
+  const error = `API ${path} failed after ${maxRetries + 1} attempts: ${lastError}`;
+  addExtLog('error', 'BG', error);
+  return { error };
 }
 
 // ---- fbai_v4 state helpers ----
@@ -55,10 +119,19 @@ function saveFbaiState(updates) {
   });
 }
 
-// ---- Token tracking ----
+// ---- Token tracking with write lock (race condition prevention) ----
 async function trackTokenUsage(usage, provider, model) {
   if (!usage) return;
+
+  // Wait for lock to be released
+  while (tokenWriteLock) {
+    await new Promise(r => setTimeout(r, 10));
+  }
+
   return new Promise(resolve => {
+    // Acquire lock
+    tokenWriteLock = true;
+
     chrome.storage.local.get(TOKEN_KEY, (data) => {
       const tokens = data[TOKEN_KEY] || {
         daily: {},
@@ -100,7 +173,11 @@ async function trackTokenUsage(usage, provider, model) {
         if (d < cutoff) delete tokens.daily[d];
       }
 
-      chrome.storage.local.set({ [TOKEN_KEY]: tokens }, resolve);
+      chrome.storage.local.set({ [TOKEN_KEY]: tokens }, () => {
+        // Release lock
+        tokenWriteLock = false;
+        resolve();
+      });
     });
   });
 }
@@ -325,9 +402,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // ---- Chat reply (AI processing) ----
   if (msg.type === 'newIncomingMessages') {
-    handleIncomingMessages(msg.messages, msg.conversationId, msg.userName)
-      .then(replies => sendResponse({ replies }))
-      .catch(e => sendResponse({ error: e.message }));
+    const convId = msg.conversationId;
+
+    // Chain onto existing queue for this conversation
+    const existingPromise = messageProcessingQueues.get(convId) || Promise.resolve();
+    const newPromise = existingPromise
+      .then(() => handleIncomingMessages(msg.messages, convId, msg.userName))
+      .catch(e => {
+        addExtLog('error', 'BG', `Message processing error: ${e.message}`);
+        return { error: e.message };
+      })
+      .finally(() => {
+        // Clean up queue entry
+        messageProcessingQueues.delete(convId);
+      });
+
+    messageProcessingQueues.set(convId, newPromise);
+
+    newPromise.then(replies => sendResponse({ replies }));
     return true;
   }
 
@@ -351,14 +443,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const enabled = msg.enabled;
     chrome.storage.local.set({ autoReplyEnabled: enabled }, async () => {
       // Update fbai_v4 bot state — ALSO clear queue on disable
-      await saveFbaiState({
+      const stateUpdates = {
         autoReply: enabled,
         mode: enabled ? 'scanning' : 'idle',
         ...(enabled
           ? { processed: [], queue: [] }
           : { queue: [], processed: [] }  // Clear queue on disable too
         ),
-      });
+      };
+
+      // On disable, store abort generation timestamp for content scripts
+      if (!enabled) {
+        stateUpdates.abortGenerationTime = Date.now();
+      }
+
+      await saveFbaiState(stateUpdates);
 
       addExtLog('info', 'BG', `Auto-reply ${enabled ? 'ENABLED' : 'DISABLED'}`);
 
@@ -421,7 +520,10 @@ async function handleIncomingMessages(messages, conversationId, userName) {
       body: JSON.stringify({ conversationId, userName, message: msg.text, messageId: msg.id }),
     });
 
-    if (result?.reply) {
+    if (result?.error) {
+      addExtLog('error', 'AI', `Reply error: ${result.error}`);
+      replies.push({ messageId: msg.id, reply: null, error: result.error });
+    } else if (result?.reply) {
       replies.push({ messageId: msg.id, reply: result.reply });
       addExtLog('success', 'AI', `Reply (${result.source}): "${result.reply.substring(0, 60)}"`);
 
@@ -429,18 +531,30 @@ async function handleIncomingMessages(messages, conversationId, userName) {
       if (result.usage) {
         // Use cached settings (refresh every 60s instead of every message)
         const now = Date.now();
-        if (!cachedProvider || now - settingsCacheTime > SETTINGS_CACHE_TTL) {
+        let needsRefresh = !cachedProvider || now - settingsCacheTime > SETTINGS_CACHE_TTL;
+
+        if (needsRefresh) {
           const settings = await api('/settings');
-          cachedProvider = settings?.find?.(s => s.key === 'ai_task_chat_provider')?.value || 'unknown';
-          cachedModel = settings?.find?.(s => s.key === `ai_${cachedProvider}_model`)?.value || 'unknown';
-          settingsCacheTime = now;
+          if (!settings?.error) {
+            cachedProvider = settings?.find?.(s => s.key === 'ai_task_chat_provider')?.value || 'unknown';
+            cachedModel = settings?.find?.(s => s.key === `ai_${cachedProvider}_model`)?.value || 'unknown';
+            settingsCacheTime = now;
+          } else {
+            addExtLog('warn', 'TOKEN', 'Failed to refresh settings cache, using previous values');
+          }
         }
 
-        await trackTokenUsage(result.usage, cachedProvider, cachedModel);
-        addExtLog('info', 'TOKEN', `Used ${result.usage.totalTokens} tokens (in:${result.usage.promptTokens} out:${result.usage.completionTokens})`);
+        // Validate cache before using
+        if (cachedProvider === 'unknown' || cachedModel === 'unknown') {
+          addExtLog('warn', 'TOKEN', 'Cached provider/model are invalid, skipping token tracking');
+        } else {
+          await trackTokenUsage(result.usage, cachedProvider, cachedModel);
+          addExtLog('info', 'TOKEN', `Used ${result.usage.totalTokens} tokens (in:${result.usage.promptTokens} out:${result.usage.completionTokens})`);
+        }
       }
-    } else if (result?.error) {
-      addExtLog('error', 'AI', `Reply error: ${result.error}`);
+    } else {
+      addExtLog('warn', 'AI', `No reply or error in result`);
+      replies.push({ messageId: msg.id, reply: null, error: 'No reply received' });
     }
   }
   return replies;

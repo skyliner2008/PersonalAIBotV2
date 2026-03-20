@@ -4,8 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('db');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STARTUP_COMPACT = process.env.STARTUP_COMPACT === '1';
 
 let db: ReturnType<typeof Database>;
 
@@ -103,44 +107,39 @@ function runSql(dbInstance: ReturnType<typeof Database>, sql: string, params: Sq
   dbInstance.prepare(sql).run(...params);
 }
 
-export async function initDb(): Promise<SqliteDatabase> {
-  if (db) return db;
-
-  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
-  db = new Database(config.dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');  // Required for ON DELETE CASCADE to work
-
-  // Run schema
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-  db.exec(schema);
-
-  // --- Migrations: add columns if missing (for existing databases) ---
-  try { db.exec(`ALTER TABLE conversations ADD COLUMN summary_msg_count INTEGER DEFAULT 0`); } catch { /* already exists */ }
+/**
+ * Internal helper to run database migrations
+ */
+function runMigrations(dbInstance: SqliteDatabase): void {
+  // --- Conversations migration ---
   try {
-    db.exec(`CREATE TABLE IF NOT EXISTS user_profiles (
-    user_id TEXT PRIMARY KEY, display_name TEXT, facts TEXT DEFAULT '[]',
-    preferences TEXT DEFAULT '{}', tags TEXT DEFAULT '[]',
-    total_messages INTEGER DEFAULT 0, first_contact DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  } catch { /* already exists */ }
+    dbInstance.exec(`ALTER TABLE conversations ADD COLUMN summary_msg_count INTEGER DEFAULT 0`);
+  } catch (e) {
+    logger.debug('Column summary_msg_count already exists in conversations', { error: String(e) });
+  }
 
-  // --- Safety: ensure indexes exist (idempotent) ---
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_chat ON episodes(chat_id, id)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_chat ON knowledge(chat_id, timestamp)`); } catch { /* exists */ }
-  // Additional indexes for performance
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_conv_ts ON messages(conversation_id, timestamp)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_logs_ts ON activity_logs(created_at)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_core_memory_chat ON core_memory(chat_id, block_label)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_archival_memory_chat ON archival_memory(chat_id, created_at)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_processed_messages ON processed_messages(created_at)`); } catch { /* exists */ }
+  // --- User Profiles migration ---
+  try {
+    dbInstance.exec(`CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id TEXT PRIMARY KEY, display_name TEXT, facts TEXT DEFAULT '[]',
+      preferences TEXT DEFAULT '{}', tags TEXT DEFAULT '[]',
+      total_messages INTEGER DEFAULT 0, first_contact DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) {
+    console.warn('[DB migration] unexpected error creating user_profiles table:', String(e));
+  }
+
+  // --- GraphRAG migration ---
+  try {
+    dbInstance.exec(`ALTER TABLE knowledge_nodes ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`);
+  } catch (e) {
+    logger.debug('Column updated_at already exists in knowledge_nodes', { error: String(e) });
+  }
 
   // --- Evolution System tables ---
   try {
-    db.exec(`CREATE TABLE IF NOT EXISTS evolution_log (
+    dbInstance.exec(`CREATE TABLE IF NOT EXISTS evolution_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       action_type TEXT NOT NULL,
       description TEXT NOT NULL,
@@ -149,9 +148,7 @@ export async function initDb(): Promise<SqliteDatabase> {
       success INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-  } catch { /* already exists */ }
-  try {
-    db.exec(`CREATE TABLE IF NOT EXISTS learning_journal (
+    dbInstance.exec(`CREATE TABLE IF NOT EXISTS learning_journal (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       category TEXT NOT NULL,
       insight TEXT NOT NULL,
@@ -160,14 +157,45 @@ export async function initDb(): Promise<SqliteDatabase> {
       times_applied INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-  } catch { /* already exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_evolution_log_type ON evolution_log(action_type, created_at)`); } catch { /* exists */ }
-  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_learning_journal_cat ON learning_journal(category, confidence)`); } catch { /* exists */ }
+    dbInstance.exec(`CREATE INDEX IF NOT EXISTS idx_evolution_log_type ON evolution_log(action_type, created_at)`);
+    dbInstance.exec(`CREATE INDEX IF NOT EXISTS idx_learning_journal_cat ON learning_journal(category, confidence)`);
+  } catch (e) {
+    console.warn('[DB migration] unexpected error creating evolution system tables:', String(e));
+  }
+}
 
-  // Insert default persona if none exists
-  const count = getRow(db, 'SELECT COUNT(*) as c FROM personas');
+/**
+ * Ensure all necessary indexes exist for performance
+ */
+function ensureIndexes(dbInstance: SqliteDatabase): void {
+  const indexSqls = [
+    `CREATE INDEX IF NOT EXISTS idx_episodes_chat ON episodes(chat_id, id)`,
+    `CREATE INDEX IF NOT EXISTS idx_knowledge_chat ON knowledge(chat_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id)`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_conv_ts ON messages(conversation_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_activity_logs_ts ON activity_logs(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_core_memory_chat ON core_memory(chat_id, block_label)`,
+    `CREATE INDEX IF NOT EXISTS idx_archival_memory_chat ON archival_memory(chat_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_processed_messages ON processed_messages(created_at)`
+  ];
+
+  for (const sql of indexSqls) {
+    try {
+      dbInstance.exec(sql);
+    } catch (e) {
+      console.warn('[DB migration] unexpected error creating index:', String(e));
+    }
+  }
+}
+
+/**
+ * Seed default data if database is empty
+ */
+function seedDefaultData(dbInstance: SqliteDatabase): void {
+  const count = getRow<{ c: number }>(dbInstance, 'SELECT COUNT(*) as c FROM personas');
   if (count && count.c === 0) {
-    db.prepare(`
+    dbInstance.prepare(`
       INSERT INTO personas (id, name, description, system_prompt, personality_traits, speaking_style, is_default)
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `).run(
@@ -185,14 +213,40 @@ export async function initDb(): Promise<SqliteDatabase> {
       'casual-thai'
     );
   }
+}
 
-  console.log('[DB] SQLite (better-sqlite3) initialized:', config.dbPath);
+export async function initDb(): Promise<SqliteDatabase> {
+  if (db) return db;
+
+  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  db = new Database(config.dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');  // Required for ON DELETE CASCADE to work
+
+  // Run initial schema
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+  db.exec(schema);
+
+  // Run migrations and setup
+  runMigrations(db);
+  ensureIndexes(db);
+  seedDefaultData(db);
+
+  if (STARTUP_COMPACT) {
+    logger.info('SQLite ready');
+  } else {
+    logger.info('SQLite (better-sqlite3) initialized', { path: config.dbPath });
+  }
   return db;
 }
 
 export function getDb(): SqliteDatabase {
   if (!db) throw new Error('Database not initialized. Call initDb() first.');
   return db;
+}
+
+export function isDbInitialized(): boolean {
+  return Boolean(db);
 }
 
 // ============ Helper Functions ============
@@ -210,15 +264,75 @@ export function setSetting(key: string, value: string): void {
   `, [key, value]);
 }
 
+export function deleteSetting(key: string): void {
+  runSql(getDb(), 'DELETE FROM settings WHERE key = ?', [key]);
+}
+
 // ============================================================
 // 🔒 Credential Store — AES-256-GCM encrypted settings
 // ============================================================
 // ใช้ AES-256-GCM (authenticated encryption) สำหรับ credentials ที่เก็บใน DB
 // Derive key จาก CRED_SECRET env var ด้วย scrypt
-const CRED_SECRET = process.env.CRED_SECRET || 'ai-bot-v2-secret-2024';
-// Use a fixed salt so the key is consistent across restarts
-const CRED_SALT = Buffer.from('personalaibot-v2-fixed-salt-2024');
-const DERIVED_KEY = crypto.scryptSync(CRED_SECRET, CRED_SALT, 32); // 256-bit key
+
+// Load or generate secret + salt for credential encryption
+function initCredentialSecret(): { secret: string; salt: Buffer } {
+  let credSecret = process.env.CRED_SECRET || '';
+
+  // ──── Secret: auto-generate if not provided ────────────────
+  const secretFile = path.join(config.dataDir, '.cred-secret');
+  if (!credSecret) {
+    // Try loading a previously auto-generated secret
+    try {
+      if (fs.existsSync(secretFile)) {
+        credSecret = fs.readFileSync(secretFile, 'utf-8').trim();
+      }
+    } catch (e) { console.debug('[DB] Could not read secret file:', String(e)); }
+
+    // Still empty → generate and persist
+    if (!credSecret) {
+      credSecret = crypto.randomBytes(32).toString('hex');
+      try {
+        fs.mkdirSync(path.dirname(secretFile), { recursive: true });
+        fs.writeFileSync(secretFile, credSecret, 'utf-8');
+        console.log('🔑 Auto-generated CRED_SECRET (saved to .cred-secret)');
+      } catch (err) {
+        console.warn('⚠️  Could not persist auto-generated secret:', err);
+      }
+    }
+    console.warn('⚠️  CRED_SECRET not set in .env — using auto-generated value');
+    console.warn('💡 For production, add CRED_SECRET=<random-string-32+chars> to your .env');
+  }
+
+  // ──── Salt: load or generate ───────────────────────────────
+  let storedSalt: string | null = null;
+  try {
+    const saltFile = path.join(config.dataDir, '.cred-salt');
+    if (fs.existsSync(saltFile)) {
+      storedSalt = fs.readFileSync(saltFile, 'utf-8').trim();
+    } else {
+      const randomSalt = crypto.randomBytes(32).toString('hex');
+      try {
+        fs.mkdirSync(path.dirname(saltFile), { recursive: true });
+        fs.writeFileSync(saltFile, randomSalt, 'utf-8');
+      } catch (err) {
+        console.warn('⚠️  Could not store credential salt:', err);
+      }
+      storedSalt = randomSalt;
+    }
+  } catch (err) {
+    console.warn('⚠️  Warning initializing credential salt:', err);
+    storedSalt = null;
+  }
+
+  const saltStr = storedSalt || 'personalaibot-v2-fallback-salt';
+  return {
+    secret: credSecret,
+    salt: Buffer.from(saltStr.substring(0, 32))
+  };
+}
+
+const { secret: CRED_SECRET, salt: CRED_SALT } = initCredentialSecret();
+const DERIVED_KEY = crypto.scryptSync(CRED_SECRET, CRED_SALT, 32);
 
 function aesEncrypt(text: string): string {
   const iv = crypto.randomBytes(16);
@@ -253,7 +367,8 @@ function xorDeobfuscateLegacy(encoded: string): string {
       result.push(bytes[i] ^ key.charCodeAt(i % key.length));
     }
     return result.map(c => String.fromCharCode(c)).join('');
-  } catch {
+  } catch (e) {
+    console.debug('[DB] Legacy decode failed:', String(e));
     return encoded;
   }
 }
@@ -270,13 +385,13 @@ export function getCredential(key: string): string | null {
   if (!raw) return null;
   if (raw.startsWith('aes:')) {
     try { return aesDecrypt(raw.slice(4)); }
-    catch { return null; }
+    catch (e) { console.warn('[DB] AES decrypt failed for key:', key, String(e)); return null; }
   }
   // Backward compat: migrate old XOR obfuscated values
   if (raw.startsWith('obf:')) {
     const plaintext = xorDeobfuscateLegacy(raw.slice(4));
     // Re-encrypt with AES on read (auto-migration)
-    try { setCredential(key, plaintext); } catch { /* ignore migration error */ }
+    try { setCredential(key, plaintext); } catch (e) { console.debug('[DB] Auto-migration of obf credential failed:', String(e)); }
     return plaintext;
   }
   return raw; // plaintext fallback
@@ -387,7 +502,8 @@ function safeRegexTest(re: RegExp, input: string, timeoutMs: number = 100): bool
       console.warn(`[QA] Slow regex (${elapsed}ms): ${re.source.substring(0, 60)}`);
     }
     return result;
-  } catch {
+  } catch (e) {
+    console.debug('[QA] Regex test error:', String(e));
     return false;
   }
 }
@@ -404,8 +520,9 @@ function getCachedRegex(pattern: string): RegExp | null {
     const re = new RegExp(pattern, 'i');
     regexCache.set(pattern, { re, ts: Date.now() });
     return re;
-  } catch {
-    return null; // invalid regex
+  } catch (e) {
+    console.debug('[QA] Invalid regex pattern:', pattern.substring(0, 60), String(e));
+    return null;
   }
 }
 
@@ -473,7 +590,8 @@ export function getDbStats(): Record<string, number> {
     try {
       const row = db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number } | undefined;
       stats[table] = row?.c || 0;
-    } catch {
+    } catch (e) {
+      console.debug('[DB] Stats count error for', table, ':', String(e));
       stats[table] = 0;
     }
   }
@@ -495,5 +613,52 @@ export function cleanupOldProcessedMessages(daysOld: number = 7): number {
   try {
     const result = getDb().prepare(`DELETE FROM processed_messages WHERE created_at < datetime('now', '-' || ? || ' days')`).run(daysOld);
     return (result as { changes: number }).changes || 0;
-  } catch { return 0; }
+  } catch (e) { console.debug('[DB] Cleanup error:', String(e)); return 0; }
+}
+
+/**
+ * Track LLM token usage for the Self-Upgrade system and calculate approximate cost.
+ * Calculates cost dynamically based on model name.
+ */
+export function trackUpgradeTokens(model: string, tokensIn: number, tokensOut: number): void {
+  try {
+    let costIn = 0;
+    let costOut = 0;
+    
+    // Approximate Pricing per 1M tokens (USD)
+    const m = model.toLowerCase();
+    
+    if (m.includes('pro')) {
+      // Gemini 1.5 Pro or similar Pro models ($1.25 / $5.00 per 1M)
+      costIn = (tokensIn / 1_000_000) * 1.25;
+      costOut = (tokensOut / 1_000_000) * 5.00;
+    } else if (m.includes('flash-lite') || m.includes('1.5-flash')) {
+      // Gemini Flash Lite or 1.5 Flash ($0.075 / $0.30 per 1M)
+      costIn = (tokensIn / 1_000_000) * 0.075;
+      costOut = (tokensOut / 1_000_000) * 0.30;
+    } else if (m.includes('flash') || m.includes('gemini-2.0')) {
+      // Gemini 2.0 Flash or general flash ($0.10 / $0.40 per 1M)
+      costIn = (tokensIn / 1_000_000) * 0.10;
+      costOut = (tokensOut / 1_000_000) * 0.40;
+    } else {
+      // Fallback
+      costIn = (tokensIn / 1_000_000) * 0.10;
+      costOut = (tokensOut / 1_000_000) * 0.40;
+    }
+
+    const totalCost = costIn + costOut;
+
+    const dbInstance = getDb();
+    dbInstance.transaction(() => {
+      const currentIn = parseFloat(getSetting('upgrade_tokens_in') || '0');
+      const currentOut = parseFloat(getSetting('upgrade_tokens_out') || '0');
+      const currentCost = parseFloat(getSetting('upgrade_cost_usd') || '0');
+      
+      setSetting('upgrade_tokens_in', (currentIn + tokensIn).toString());
+      setSetting('upgrade_tokens_out', (currentOut + tokensOut).toString());
+      setSetting('upgrade_cost_usd', (currentCost + totalCost).toString());
+    })();
+  } catch (e) {
+    console.debug('[DB] trackUpgradeTokens error:', String(e));
+  }
 }

@@ -1,5 +1,10 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { Type, FunctionDeclaration } from '@google/genai';
+import * as fs from 'fs';
+import * as os from 'os';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('browser-tool');
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
@@ -48,7 +53,7 @@ async function getPage(): Promise<Page> {
 async function cleanupBrowser() {
   try {
     if (browser) await browser.close();
-  } catch (e) {}
+  } catch (e) { console.debug('[Browser] cleanup:', String(e)); }
   browser = null;
   context = null;
   page = null;
@@ -75,7 +80,7 @@ export const browserNavigateDeclaration: FunctionDeclaration = {
 export async function browserNavigate({ url }: { url: string }): Promise<string> {
   try {
     const p = await getPage();
-    console.log(`[Browser] Navigating to: ${url}`);
+    logger.info(`Navigating to: ${url}`);
     
     // เปลี่ยนมาใช้ 'domcontentloaded' เพื่อความเร็ว และป้องกัน Timeout จากโฆษณา
     await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });

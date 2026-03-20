@@ -1,40 +1,118 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { Type } from '@google/genai';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { approvalSystem } from '../../utils/approvalSystem.js';
+import { createLogger } from '../../utils/logger.js';
+const logger = createLogger('os-tool');
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+// Input validation helpers for command injection prevention
+function isValidAppName(name) {
+    // Allow alphanumeric, dots, hyphens, underscores, spaces, drive letters, slashes
+    return /^[\w.\-\s/\\:()]{1,260}$/u.test(name) &&
+        !/[&|;`$]/.test(name); // No shell metacharacters
+}
+function isValidProcessName(name) {
+    return /^[\w.\-]{1,256}\.exe$/i.test(name);
+}
+// ============================================================
+// 🔒 Command Security Sandbox
+// ============================================================
+// Patterns ที่อันตราย — ห้ามรันเด็ดขาด
+const DANGEROUS_PATTERNS = [
+    /\bformat\s+[a-z]:/i, // format c:
+    /\brmdir\s+\/s/i, // rmdir /s (recursive delete)
+    /\bdel\s+\/[sf]/i, // del /s /f (silent force delete)
+    /\brd\s+\/s/i, // rd /s
+    /\bregsvr32\b/i, // register DLL
+    /\bwmic\s+.*delete/i, // WMIC delete
+    /\bnet\s+(user|localgroup)\b/i, // modify users/groups
+    /\bschtasks\s+\/create/i, // create scheduled tasks
+    /\bpowershell.*-enc\b/i, // base64 encoded PS
+    /\bcurl\s+.*\|\s*(sh|bash|cmd)/i, // curl pipe shell
+    /\bchmod\s+777/i, // world-writable
+    /\bsudo\b/i, // sudo
+    /\b(rm|del)\s+.*\\\*/i, // wildcard delete on root paths
+    /shutdown\s+\/[rs]/i, // shutdown/restart
+    /\bregistry\b.*delete/i, // registry delete
+];
+function isSafeCommand(command) {
+    // ตรวจ patterns อันตราย
+    for (const pattern of DANGEROUS_PATTERNS) {
+        if (pattern.test(command)) {
+            return { safe: false, reason: `คำสั่งนี้อาจเป็นอันตราย (ตรงกับ pattern: ${pattern.source})`, type: 'security' };
+        }
+    }
+    // ห้ามรัน command ที่มี pipe ไปยัง shell interpreter
+    if (/\|\s*(cmd|powershell|bash|sh|zsh)\b/i.test(command)) {
+        return { safe: false, reason: 'ห้าม pipe ไปยัง shell interpreter', type: 'security' };
+    }
+    // ห้ามใช้ command substitution ที่ซับซ้อน
+    if (/`[^`]+`|\$\([^)]+\)/.test(command)) {
+        return { safe: false, reason: 'ห้ามใช้ command substitution', type: 'security' };
+    }
+    // ห้ามใช้ Linux tools ที่ไม่มีบน Windows
+    if (/^\s*(grep|ls|cat|rm -rf|pwd)\b/i.test(command)) {
+        return {
+            safe: false,
+            reason: `You are on WINDOWS. The Linux command '${command.split(' ')[0]}' does not exist. Use Windows equivalents: findstr/Select-String (for grep), dir (for ls), type (for cat), del (for rm).`,
+            type: 'compatibility'
+        };
+    }
+    return { safe: true };
+}
 // ==========================================
 // 1. Run Command (CMD/PowerShell)
 // ==========================================
 export const runCommandDeclaration = {
     name: "run_command",
-    description: "รันคำสั่ง Command Line (CMD/PowerShell) บนระบบปฏิบัติการ Windows คืนค่าผลลัพธ์จาก Terminal. ใช้สำหรับจัดการไฟล์ เช็คสถานะระบบ หรือควบคุม OS ในระดับลึก. ข้อควรระวัง: ห้ามสั่งลบระบบสำคัญเด็ดขาด",
+    description: "รันคำสั่ง Command Line (CMD/PowerShell) บนระบบปฏิบัติการ Windows คืนค่าผลลัพธ์จาก Terminal. ใช้สำหรับจัดการไฟล์ เช็คสถานะระบบ หรือควบคุม OS ในระดับลึก. ข้อควรระวัง: คุณกำลังรันบน Windows! ดังนั้นห้ามใช้ Linux commands เช่น grep, cat, ls, rm (ใช้ findstr, Select-String, type, dir, del แทน)",
     parameters: {
         type: Type.OBJECT,
         properties: {
             command: {
                 type: Type.STRING,
-                description: "คำสั่งที่ต้องการรัน (เช่น 'dir', 'ipconfig', 'ping google.com')",
+                description: "คำสั่งที่ต้องการรัน (เช่น 'dir', 'findstr', 'ping google.com')",
             },
         },
         required: ["command"],
     },
 };
-export async function runCommand({ command }) {
+export async function runCommand({ command }, options) {
+    const chatId = options?.chatId || 'system_fallback';
+    const check = isSafeCommand(command);
+    // 🔒 Security / Compatibility check ก่อนรันทุกครั้ง
+    if (!check.safe) {
+        if (check.type === 'compatibility') {
+            return `🚫 OS Compatibility Error: ${check.reason}`;
+        }
+        if (chatId.startsWith('admin_')) {
+            console.log(`[Security] Admin override granted for blocked command: "${command}"`);
+        }
+        else {
+            console.warn(`[Security] Suspicious command intercepted: "${command}" — ${check.reason}`);
+            // Request Human-in-the-Loop approval instead of outright blocking it
+            const isApproved = await approvalSystem.requestApproval(chatId, 'run_command', `AI ต้องการรันคำสั่งที่อาจเป็นอันตราย: \`${command}\`\nเหตุผลที่ดักจับ: ${check.reason}`);
+            if (!isApproved) {
+                return `🚫 คำสั่งถูกปฏิเสธโดยมนุษย์ (หรือหมดเวลารออนุมัติ): ${check.reason}`;
+            }
+            console.log(`[Security] Command approved by human: "${command}"`);
+        }
+    }
     try {
-        const { stdout, stderr } = await execAsync(command);
+        const { stdout, stderr } = await execAsync(command, { timeout: 30000 });
         if (stderr) {
             console.warn(`⚠️ Command Stderr: ${stderr}`);
-            return `Command executed with warnings/errors:
-${stderr}
-Output:
-${stdout}`;
+            return `Output:\n${stdout}\n\nWarnings:\n${stderr}`;
         }
-        return `Success:
-${stdout}`;
+        return `✅ Output:\n${stdout || '(ไม่มี output)'}`;
     }
     catch (error) {
         console.error(`❌ Command Error:`, error);
-        return `Error executing command: ${error.message}`;
+        return `❌ Error: ${error.message}`;
     }
 }
 // ==========================================
@@ -55,9 +133,12 @@ export const openApplicationDeclaration = {
     },
 };
 export async function openApplication({ app_name_or_path }) {
+    if (!isValidAppName(app_name_or_path)) {
+        return `🚫 ชื่อโปรแกรมไม่ถูกต้อง (ห้ามมีอักขระพิเศษ &|;\`$)`;
+    }
     try {
-        // ใช้คำสั่ง 'start' ของ Windows ในการเปิด
-        await execAsync(`start "" "${app_name_or_path}"`);
+        // Use execFile with cmd.exe to avoid shell interpretation of app_name_or_path
+        await execFileAsync('cmd.exe', ['/c', 'start', '', app_name_or_path], { timeout: 10_000 });
         return `สั่งเปิดโปรแกรม '${app_name_or_path}' สำเร็จแล้ว`;
     }
     catch (error) {
@@ -83,14 +164,176 @@ export const closeApplicationDeclaration = {
     },
 };
 export async function closeApplication({ process_name }) {
+    if (!isValidProcessName(process_name)) {
+        return `🚫 ชื่อ process ต้องลงท้ายด้วย .exe และมีเฉพาะตัวอักษร/ตัวเลข (เช่น notepad.exe)`;
+    }
     try {
-        // ใช้ taskkill ของ Windows
-        await execAsync(`taskkill /IM "${process_name}" /F`);
+        // Use execFile to prevent shell injection
+        await execFileAsync('taskkill', ['/IM', process_name, '/F'], { timeout: 10_000 });
         return `สั่งปิดโปรแกรม '${process_name}' สำเร็จแล้ว`;
     }
     catch (error) {
         console.error(`❌ Close App Error:`, error);
         return `ไม่สามารถปิดโปรแกรมได้ หรือโปรแกรมไม่ได้เปิดอยู่: ${error.message}`;
+    }
+}
+// ==========================================
+// 4. Run Python Code (Code Interpreter)
+// ==========================================
+export const runPythonDeclaration = {
+    name: "run_python",
+    description: "รัน Python code โดยตรง ใช้คำนวณ วิเคราะห์ข้อมูล สร้างกราฟ จัดการไฟล์ หรือทำอะไรก็ได้ที่ Python ทำได้ ส่งคืนผลลัพธ์ของ code",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            code: {
+                type: Type.STRING,
+                description: "Python code ที่ต้องการรัน (ใช้ print() เพื่อแสดงผล)",
+            },
+        },
+        required: ["code"],
+    },
+};
+export async function runPython({ code }) {
+    const tmpDir = path.join(os.tmpdir(), 'ai_python');
+    if (!fs.existsSync(tmpDir))
+        fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, `script_${Date.now()}.py`);
+    try {
+        fs.writeFileSync(tmpFile, code, 'utf8');
+        const { stdout, stderr } = await execAsync(`python "${tmpFile}"`, { timeout: 30000 });
+        const output = stdout || '';
+        const errors = stderr || '';
+        return errors
+            ? `Output:\n${output}\n\nWarnings/Errors:\n${errors}`
+            : `Output:\n${output}`;
+    }
+    catch (error) {
+        return `❌ Python Error: ${error.message}\n${error.stderr || ''}`;
+    }
+    finally {
+        try {
+            fs.unlinkSync(tmpFile);
+        }
+        catch { /* ignore */ }
+    }
+}
+// ==========================================
+// 5. System Info
+// ==========================================
+export const systemInfoDeclaration = {
+    name: "system_info",
+    description: "ดึงข้อมูลระบบปฏิบัติการ เช่น CPU, RAM, Disk, Network, Uptime ใช้เมื่อต้องการเช็คสถานะเครื่อง",
+    parameters: { type: Type.OBJECT, properties: {} },
+};
+export function systemInfo() {
+    const cpus = os.cpus();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const nets = os.networkInterfaces();
+    const ips = [];
+    for (const [name, addrs] of Object.entries(nets)) {
+        for (const addr of addrs || []) {
+            if (addr.family === 'IPv4' && !addr.internal) {
+                ips.push(`${name}: ${addr.address}`);
+            }
+        }
+    }
+    return `🖥️ ข้อมูลระบบ:
+• OS: ${os.type()} ${os.release()} (${os.arch()})
+• Hostname: ${os.hostname()}
+• CPU: ${cpus[0]?.model || 'Unknown'} (${cpus.length} cores)
+• RAM: ${(usedMem / 1024 / 1024 / 1024).toFixed(1)}GB / ${(totalMem / 1024 / 1024 / 1024).toFixed(1)}GB (${((usedMem / totalMem) * 100).toFixed(0)}%)
+• Free RAM: ${(freeMem / 1024 / 1024 / 1024).toFixed(1)}GB
+• Uptime: ${(os.uptime() / 3600).toFixed(1)} ชม.
+• Network: ${ips.join(', ') || 'N/A'}
+• Node.js: ${process.version}`;
+}
+// ==========================================
+// 6. Screenshot Desktop (via PowerShell)
+// ==========================================
+export const screenshotDesktopDeclaration = {
+    name: "screenshot_desktop",
+    description: "ถ่ายภาพหน้าจอ Desktop ทั้งจอ บันทึกเป็นไฟล์ภาพ ใช้เมื่อต้องการดูว่าหน้าจอแสดงอะไรอยู่",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            save_path: {
+                type: Type.STRING,
+                description: "พาธที่จะบันทึกไฟล์ภาพ (ค่าเริ่มต้น: Desktop/screenshot.png)",
+            },
+        },
+    },
+};
+export async function screenshotDesktop({ save_path }) {
+    const filePath = save_path || path.join(os.homedir(), 'Desktop', `screenshot_${Date.now()}.png`);
+    // Validate filePath to prevent command injection
+    const validPathPattern = /^[a-zA-Z0-9_\-\\/.:\s()]+\.(png|jpg|jpeg|bmp|gif)$/i;
+    if (!validPathPattern.test(filePath)) {
+        return `🚫 พาธไฟล์ไม่ถูกต้อง — ต้องลงท้ายด้วย .png/.jpg/.bmp และห้ามมีอักขระพิเศษ`;
+    }
+    try {
+        const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen
+$bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
+$bitmap.Save('${filePath.replace(/'/g, "''")}')
+$graphics.Dispose()
+$bitmap.Dispose()
+`;
+        await execAsync(`powershell -Command "${psScript.replace(/\n/g, '; ')}"`, { timeout: 15000 });
+        return `✅ ถ่ายภาพหน้าจอสำเร็จ → ${filePath}`;
+    }
+    catch (err) {
+        return `❌ Screenshot failed: ${err.message}`;
+    }
+}
+// ==========================================
+// 7. Clipboard Operations
+// ==========================================
+export const clipboardReadDeclaration = {
+    name: "clipboard_read",
+    description: "อ่านข้อความจาก Clipboard (คลิปบอร์ด) ของ Windows",
+    parameters: { type: Type.OBJECT, properties: {} },
+};
+export async function clipboardRead() {
+    try {
+        const { stdout } = await execAsync('powershell -command "Get-Clipboard"', { timeout: 5000 });
+        return `📋 Clipboard: ${stdout.trim() || '(ว่าง)'}`;
+    }
+    catch (err) {
+        return `❌ อ่าน Clipboard ไม่ได้: ${err.message}`;
+    }
+}
+export const clipboardWriteDeclaration = {
+    name: "clipboard_write",
+    description: "เขียนข้อความลง Clipboard ของ Windows",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            text: { type: Type.STRING, description: "ข้อความที่ต้องการเขียน" },
+        },
+        required: ["text"],
+    },
+};
+export async function clipboardWrite({ text }) {
+    try {
+        // Use stdin pipe instead of string interpolation to prevent injection
+        const child = execFile('powershell', ['-command', '$input | Set-Clipboard'], { timeout: 5000 });
+        child.stdin?.write(text);
+        child.stdin?.end();
+        await new Promise((resolve, reject) => {
+            child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Exit code ${code}`)));
+            child.on('error', reject);
+        });
+        return `✅ เขียนลง Clipboard สำเร็จ`;
+    }
+    catch (err) {
+        return `❌ เขียน Clipboard ไม่ได้: ${err.message}`;
     }
 }
 //# sourceMappingURL=os.js.map

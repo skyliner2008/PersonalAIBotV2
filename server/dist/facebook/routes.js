@@ -3,7 +3,16 @@
 // Webhook endpoint + management APIs
 // ============================================================
 import { Router } from 'express';
-import { addLog, setSetting } from '../database/db.js';
+import crypto from 'crypto';
+/** Parse a query param as a positive integer, clamped to [min, max] */
+function parseIntParam(value, defaultVal, min = 1, max = 500) {
+    const n = parseInt(String(value ?? ''), 10);
+    if (Number.isNaN(n) || n < min)
+        return defaultVal;
+    return Math.min(n, max);
+}
+import { addLog } from '../database/db.js';
+import { setManagedSetting } from '../config/settingsSecurity.js';
 import { getFBConfig, isFBConfigured, getPageInfo, getConnectedPages, getPagePosts, createPagePost, deletePost, getPostComments, replyToComment, likeComment, getPageConversations, getConversationMessages, sendMessage, debugToken, exchangeForLongLivedToken, subscribeAppToPage, } from './graphAPI.js';
 import { processWebhookEntries } from './webhookHandler.js';
 export const fbRouter = Router();
@@ -23,8 +32,53 @@ fbRouter.get('/webhook', (req, res) => {
     addLog('webhook', 'Webhook verification failed', `Invalid token`, 'error');
     return res.sendStatus(403);
 });
+// Verify Facebook webhook signature
+function verifyFacebookSignature(req) {
+    const cfg = getFBConfig();
+    const xHubSignature = req.get('x-hub-signature');
+    const rawBody = req.rawBody || JSON.stringify(req.body);
+    if (!xHubSignature) {
+        console.warn('[Webhook] Missing x-hub-signature header');
+        addLog('webhook', 'Unverified webhook', 'Missing signature header', 'warning');
+        return false;
+    }
+    if (!cfg.appSecret) {
+        console.error('[Webhook] App secret not configured');
+        return false;
+    }
+    try {
+        // Parse signature: sha1=...
+        const [algorithm, providedHash] = xHubSignature.split('=');
+        if (algorithm !== 'sha1') {
+            console.warn('[Webhook] Unexpected signature algorithm:', algorithm);
+            return false;
+        }
+        // Compute hash
+        const computedHash = crypto
+            .createHmac('sha1', cfg.appSecret)
+            .update(rawBody)
+            .digest('hex');
+        // Constant-time comparison
+        const match = crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(computedHash));
+        if (!match) {
+            console.warn('[Webhook] Signature mismatch');
+            addLog('webhook', 'Unverified webhook', 'Signature verification failed', 'warning');
+        }
+        return match;
+    }
+    catch (err) {
+        console.error('[Webhook] Signature verification error:', err.message);
+        addLog('webhook', 'Signature error', err.message, 'error');
+        return false;
+    }
+}
 // Facebook webhook events (POST)
 fbRouter.post('/webhook', (req, res) => {
+    // Verify webhook signature
+    if (!verifyFacebookSignature(req)) {
+        console.warn('[Webhook] Signature verification failed, rejecting request');
+        return res.sendStatus(403);
+    }
     const body = req.body;
     if (body.object !== 'page') {
         return res.sendStatus(404);
@@ -55,17 +109,17 @@ fbRouter.get('/status', (req, res) => {
 fbRouter.post('/config', (req, res) => {
     const { appId, appSecret, pageAccessToken, pageId, verifyToken, apiVersion } = req.body;
     if (appId !== undefined)
-        setSetting('fb_app_id', appId);
+        setManagedSetting('fb_app_id', appId);
     if (appSecret !== undefined)
-        setSetting('fb_app_secret', appSecret);
+        setManagedSetting('fb_app_secret', appSecret);
     if (pageAccessToken !== undefined)
-        setSetting('fb_page_access_token', pageAccessToken);
+        setManagedSetting('fb_page_access_token', pageAccessToken);
     if (pageId !== undefined)
-        setSetting('fb_page_id', pageId);
+        setManagedSetting('fb_page_id', pageId);
     if (verifyToken !== undefined)
-        setSetting('fb_verify_token', verifyToken);
+        setManagedSetting('fb_verify_token', verifyToken);
     if (apiVersion !== undefined)
-        setSetting('fb_api_version', apiVersion);
+        setManagedSetting('fb_api_version', apiVersion);
     addLog('fb-api', 'Config updated', 'Facebook API settings saved', 'success');
     res.json({ success: true });
 });
@@ -92,10 +146,10 @@ fbRouter.post('/page/select', async (req, res) => {
     if (!pageId || !pageAccessToken) {
         return res.status(400).json({ error: 'pageId and pageAccessToken are required' });
     }
-    setSetting('fb_page_id', pageId);
-    setSetting('fb_page_access_token', pageAccessToken);
+    setManagedSetting('fb_page_id', pageId);
+    setManagedSetting('fb_page_access_token', pageAccessToken);
     if (pageName)
-        setSetting('fb_page_name', pageName);
+        setManagedSetting('fb_page_name', pageName);
     addLog('fb-api', 'Page selected', `${pageName || pageId}`, 'success');
     res.json({ success: true });
 });
@@ -149,14 +203,14 @@ fbRouter.post('/send', async (req, res) => {
 fbRouter.get('/conversations', async (req, res) => {
     if (!isFBConfigured())
         return res.status(400).json({ error: 'Facebook API not configured' });
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = parseIntParam(req.query.limit, 20, 1, 100);
     const convs = await getPageConversations(limit);
     res.json(convs);
 });
 fbRouter.get('/conversations/:id/messages', async (req, res) => {
     if (!isFBConfigured())
         return res.status(400).json({ error: 'Facebook API not configured' });
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = parseIntParam(req.query.limit, 20, 1, 100);
     const msgs = await getConversationMessages(req.params.id, limit);
     res.json(msgs);
 });
@@ -166,7 +220,7 @@ fbRouter.get('/conversations/:id/messages', async (req, res) => {
 fbRouter.get('/posts', async (req, res) => {
     if (!isFBConfigured())
         return res.status(400).json({ error: 'Facebook API not configured' });
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseIntParam(req.query.limit, 10, 1, 100);
     const posts = await getPagePosts(limit);
     res.json(posts);
 });
@@ -191,7 +245,7 @@ fbRouter.delete('/posts/:id', async (req, res) => {
 fbRouter.get('/posts/:id/comments', async (req, res) => {
     if (!isFBConfigured())
         return res.status(400).json({ error: 'Facebook API not configured' });
-    const limit = parseInt(req.query.limit) || 25;
+    const limit = parseIntParam(req.query.limit, 25, 1, 200);
     const comments = await getPostComments(req.params.id, limit);
     res.json(comments);
 });

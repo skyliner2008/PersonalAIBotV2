@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+server/node_modules/
+dashboard/node_modules/
+
+# Build outputs (rebuilt in Docker)
+dashboard/dist/
+server/dist/
+
+# Development files
+.git/
+.github/
+.vscode/
+*.md
+
+# Data & logs (mounted as volumes)
+data/
+server/logs/
+
+# Environment (passed via env_file)
+server/.env
+
+# Platform-specific
+fb-extension/
+personal_ai/
+*.bat
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+server/tests/
+server/src/__tests__/
+**/*.test.ts
+**/*.spec.ts
+coverage/

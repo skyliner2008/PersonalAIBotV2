@@ -1,10 +1,11 @@
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 const BASE_URL = 'https://openrouter.ai/api/v1';
 export class OpenRouterProvider {
     id = 'openrouter';
     name = 'OpenRouter';
     getKey() {
-        return getSetting('ai_openrouter_key') || '';
+        return getProviderApiKey('openrouter') || '';
     }
     getModel() {
         return getSetting('ai_openrouter_model') || 'meta-llama/llama-3.1-8b-instruct:free';
@@ -51,7 +52,8 @@ export class OpenRouterProvider {
             });
             return res.ok;
         }
-        catch {
+        catch (e) {
+            console.debug('[OpenRouter] API validation failed:', String(e));
             return false;
         }
     }

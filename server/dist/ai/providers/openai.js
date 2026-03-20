@@ -1,9 +1,10 @@
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 export class OpenAIProvider {
     id = 'openai';
     name = 'OpenAI';
     getKey() {
-        return getSetting('ai_openai_key') || '';
+        return getProviderApiKey('openai') || '';
     }
     getModel() {
         return getSetting('ai_openai_model') || 'gpt-4o-mini';
@@ -45,7 +46,8 @@ export class OpenAIProvider {
             });
             return res.ok;
         }
-        catch {
+        catch (e) {
+            console.debug('[OpenAI] API validation failed:', String(e));
             return false;
         }
     }

@@ -1,7 +1,10 @@
-import { newPage, humanDelay, isRunning } from './browser.js';
+import { newPage, humanDelay, isRunning, navigateWithRetry } from './browser.js';
 import { addLog, dbAll, dbGet, dbRun } from '../database/db.js';
 import { aiChat } from '../ai/aiRouter.js';
 import { buildCommentReplyPrompt } from '../ai/prompts/contentCreator.js';
+import { getCommentReplyDelayMs } from '../config/runtimeSettings.js';
+import { createLogger } from '../utils/logger.js';
+const logger = createLogger('CommentBot');
 let isMonitoring = false;
 let pollInterval = null;
 const MAX_CONSECUTIVE_ERRORS = 3;
@@ -14,7 +17,7 @@ export async function startCommentMonitor(io) {
         return;
     isMonitoring = true;
     consecutiveErrors = 0;
-    addLog('commentbot', 'Comment monitor started', null, 'success');
+    addLog('commentbot', 'Comment monitor started', undefined, 'success');
     io.emit('commentbot:status', { active: true });
     pollInterval = setInterval(async () => {
         if (!isMonitoring)
@@ -22,7 +25,7 @@ export async function startCommentMonitor(io) {
         // Auto-stop if browser is gone
         if (!isRunning()) {
             console.log('[CommentBot] Browser closed, auto-stopping...');
-            addLog('commentbot', 'Auto-stopped (browser closed)', null, 'warning');
+            addLog('commentbot', 'Auto-stopped (browser closed)', undefined, 'warning');
             forceStop(io);
             return;
         }
@@ -63,7 +66,7 @@ export function stopCommentMonitor(io) {
         clearInterval(pollInterval);
         pollInterval = null;
     }
-    addLog('commentbot', 'Comment monitor stopped', null, 'info');
+    addLog('commentbot', 'Comment monitor stopped', undefined, 'info');
     io.emit('commentbot:status', { active: false });
 }
 /**
@@ -79,7 +82,7 @@ async function checkWatchedPosts(io) {
         let page = null;
         try {
             page = await newPage();
-            await page.goto(watch.fb_post_url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await navigateWithRetry(page, watch.fb_post_url);
             await humanDelay(3000, 5000);
             const postContent = await getPostContent(page);
             const comments = await getNewComments(page, watch.id);
@@ -106,7 +109,9 @@ async function checkWatchedPosts(io) {
                             reply: replyText, commenter: comment.author,
                         });
                         addLog('commentbot', 'Replied to comment', `${comment.author}: "${comment.text.substring(0, 50)}" → "${replyText.substring(0, 50)}"`, 'success');
-                        await humanDelay(5000, 15000);
+                        const minDelay = getCommentReplyDelayMs();
+                        const maxDelay = Math.max(minDelay, minDelay * 3);
+                        await humanDelay(minDelay, maxDelay);
                     }
                 }
             }
@@ -124,7 +129,9 @@ async function checkWatchedPosts(io) {
                     if (!page.isClosed())
                         await page.close();
                 }
-                catch { }
+                catch (e) {
+                    console.debug('[CommentBot] page close:', String(e));
+                }
             }
         }
     }

@@ -1,4 +1,4 @@
-export type PlatformType = 'fb-extension' | 'line' | 'telegram';
+export type PlatformType = 'fb-extension' | 'line' | 'telegram' | 'facebook' | 'discord' | 'custom' | 'system';
 export declare const PLATFORMS: PlatformType[];
 export interface PersonaConfig {
     systemInstruction: string;

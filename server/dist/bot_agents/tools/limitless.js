@@ -1,5 +1,8 @@
 import { Type } from '@google/genai';
 import { runCommand } from './os.js';
+import * as cheerio from 'cheerio';
+import { createLogger } from '../../utils/logger.js';
+const logger = createLogger('limitless-tool');
 // ==========================================
 // Web Search Tool
 // ==========================================
@@ -129,15 +132,19 @@ export async function webSearch({ query }) {
         // Step 2: Extract URLs from search results, skip non-content URLs
         const urlMatches = [...searchResult.matchAll(/🔗\s*(https?:\/\/[^\s]+)/g)]
             .map(m => m[1])
-            .filter(u => !u.includes('w3.org') && !u.includes('schema.org') && !u.includes('.dtd') && !u.includes('.xml'));
+            .filter(u => !u.includes('w3.org') && !u.includes('schema.org') &&
+            !u.includes('.dtd') && !u.includes('.xml') &&
+            !u.includes('translate.google') && !u.includes('google.com/translate') &&
+            !u.includes('youtube.com') && !u.includes('facebook.com') &&
+            !u.includes('instagram.com') && !u.includes('twitter.com'));
         if (urlMatches.length === 0)
             return searchResult;
         // Step 3: Auto-fetch the first result's actual page content
         try {
-            console.log(`[web_search] Auto-reading first result: ${urlMatches[0]}`);
+            logger.info(`[web_search] Auto-reading first result: ${urlMatches[0]}`);
             const pageContent = await readWebpage({ url: urlMatches[0] });
-            // Combine snippets + page content for maximum context
-            return `${searchResult}\n---\n📄 เนื้อหาจากผลลัพธ์อันดับ 1:\n${pageContent.substring(0, 4000)}`;
+            // Combine snippets + page content (limit 2500 chars for voice-friendly speed)
+            return `${searchResult}\n---\n📄 เนื้อหาจากผลลัพธ์อันดับ 1:\n${pageContent.substring(0, 2500)}`;
         }
         catch {
             // If page read fails, return just the snippets
@@ -170,29 +177,31 @@ export async function readWebpage({ url }) {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8',
             },
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(10000),
         });
         if (!response.ok)
             return `❌ ไม่สามารถเปิดเว็บ ${url} ได้ (HTTP ${response.status})`;
         const html = await response.text();
-        // Strip HTML tags, scripts, styles and extract clean text
-        let text = html
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-            .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-            .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
-            .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ')
+        const $ = cheerio.load(html);
+        // Remove unnecessary elements that consume tokens
+        $('script, style, noscript, nav, header, footer, iframe, svg, img, form, button, .sidebar, #sidebar, .header, .footer, .ad, .advertisement, [role="navigation"]').remove();
+        // Target article/main content first, fallback to body
+        let root = $('article');
+        if (root.length === 0)
+            root = $('main');
+        if (root.length === 0)
+            root = $('body');
+        let text = root.text() || '';
+        // Clean up excessive whitespace
+        text = text
             .replace(/\s{3,}/g, '\n')
             .replace(/\n{3,}/g, '\n\n')
             .trim();
         if (text.length < 50)
-            return `❌ เว็บ ${url} ไม่มีเนื้อหาที่อ่านได้`;
+            return `❌ เว็บ ${url} มีโครงสร้างซับซ้อนหรือไม่พบเนื้อหาที่อ่านได้`;
         // Limit to 8000 chars for token efficiency
         if (text.length > 8000) {
-            text = text.substring(0, 8000) + '\n\n...(เนื้อหาถูกตัดให้สั้นลง)';
+            text = text.substring(0, 8000) + '\n\n...(เนื้อหาถูกตัดให้สั้นลงเพื่อประหยัด Token)';
         }
         return `📄 เนื้อหาจาก ${url}:\n\n${text}`;
     }
@@ -230,7 +239,9 @@ export const keyboardTypeDeclaration = {
 };
 export async function keyboardType({ text }) {
     try {
-        await runCommand({ command: `python -c "import pyautogui; pyautogui.write('${text}')"` });
+        // Safely escape user input to prevent command injection
+        const safeText = JSON.stringify(text);
+        await runCommand({ command: `python -c "import pyautogui, json; pyautogui.write(json.loads(${JSON.stringify(safeText)}))"` });
         return "พิมพ์ข้อความสำเร็จ";
     }
     catch (err) {

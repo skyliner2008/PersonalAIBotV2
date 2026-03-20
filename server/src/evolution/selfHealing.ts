@@ -2,7 +2,7 @@
 // Self-Healing System — ตรวจจับปัญหาและซ่อมแซมอัตโนมัติ
 // ============================================================
 
-import { getAgentRunHistory, getAgentStats } from '../bot_agents/agent.js';
+import { getAgentRunHistory, getAgentStats, type AgentRun } from '../bot_agents/agentTelemetry.js';
 import { logEvolution, addLearning } from './learningJournal.js';
 import { configManager } from '../bot_agents/config/configManager.js';
 import { TaskType } from '../bot_agents/config/aiConfig.js';
@@ -26,7 +26,7 @@ export function detectIssues(): Issue[] {
     if (runs.length < 5) return issues;
 
     // 1. High error rate
-    const errorRuns = runs.filter(r => r.error);
+    const errorRuns = runs.filter((r: AgentRun) => r.error);
     const errorRate = errorRuns.length / runs.length;
     if (errorRate > 0.3) {
         issues.push({
@@ -102,21 +102,36 @@ export function attemptFixes(issues: Issue[]): { fixed: number; skipped: number 
         try {
             switch (issue.type) {
                 case 'slow_model': {
-                    // Auto-switch slow task type to a faster model
+                    // Auto-switch slow task type to a faster model based on actual performance data
                     const match = issue.description.match(/Task "(\w+)"/);
                     const taskType = match?.[1] as TaskType;
                     if (taskType && Object.values(TaskType).includes(taskType)) {
                         const currentConfig = configManager.getConfig();
-                        const current = currentConfig[taskType];
-                        // Only switch if currently using a heavy model
-                        if (current?.modelName?.includes('2.5')) {
-                            const newConfig = { ...currentConfig };
-                            newConfig[taskType] = { provider: 'gemini', modelName: 'gemini-2.0-flash' };
-                            configManager.updateConfig(newConfig);
-                            logEvolution('self_heal', `Auto-switched "${taskType}" model from ${current.modelName} → gemini-2.0-flash due to slow performance`, { issue });
-                            addLearning('performance', `Switched ${taskType} to faster model due to avg ${issue.description}`, 'self_healing', 0.7);
-                            fixed++;
-                            continue;
+                        const current = currentConfig.routes[taskType];
+                        const active = current?.active;
+                        if (active?.modelName) {
+                            // Check if there's a faster alternative available
+                            const fasterAlternatives: Record<string, string> = {
+                                'gemini-2.5-flash': 'gemini-2.0-flash',
+                                'gemini-2.5-pro': 'gemini-2.0-flash',
+                                'gemini-2.0-flash': 'gemini-2.0-flash-lite',
+                                'gpt-4o': 'gpt-4o-mini',
+                                'gpt-4.1': 'gpt-4.1-mini',
+                                'claude-3-5-sonnet-20241022': 'claude-3-5-haiku-20241022',
+                            };
+                            const fasterModel = fasterAlternatives[active.modelName];
+                            if (fasterModel) {
+                                const newRoutes = { ...currentConfig.routes };
+                                newRoutes[taskType] = { 
+                                    active: { provider: active.provider, modelName: fasterModel },
+                                    fallbacks: current.fallbacks
+                                };
+                                configManager.updateConfig({ autoRouting: currentConfig.autoRouting, routes: newRoutes });
+                                logEvolution('self_heal', `Auto-switched "${taskType}" model from ${active.modelName} → ${fasterModel} due to slow performance`, { issue });
+                                addLearning('performance', `Switched ${taskType} to faster model due to avg ${issue.description}`, 'self_healing', 0.7);
+                                fixed++;
+                                continue;
+                            }
                         }
                     }
                     skipped++;

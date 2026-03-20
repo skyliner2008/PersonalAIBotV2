@@ -1,5 +1,6 @@
 import type { AIProvider, AIMessage, AICompletionOptions, AIChatResponse } from '../types.js';
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 
 const BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -8,7 +9,7 @@ export class OpenRouterProvider implements AIProvider {
   name = 'OpenRouter';
 
   private getKey(): string {
-    return getSetting('ai_openrouter_key') || '';
+    return getProviderApiKey('openrouter') || '';
   }
   private getModel(): string {
     return getSetting('ai_openrouter_model') || 'meta-llama/llama-3.1-8b-instruct:free';
@@ -57,7 +58,7 @@ export class OpenRouterProvider implements AIProvider {
         headers: { 'Authorization': `Bearer ${key}` },
       });
       return res.ok;
-    } catch { return false; }
+    } catch (e) { console.debug('[OpenRouter] API validation failed:', String(e)); return false; }
   }
 
   async listModels(): Promise<string[]> {

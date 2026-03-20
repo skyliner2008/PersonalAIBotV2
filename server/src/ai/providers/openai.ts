@@ -1,12 +1,13 @@
 import type { AIProvider, AIMessage, AICompletionOptions, AIChatResponse } from '../types.js';
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 
 export class OpenAIProvider implements AIProvider {
   id = 'openai' as const;
   name = 'OpenAI';
 
   private getKey(): string {
-    return getSetting('ai_openai_key') || '';
+    return getProviderApiKey('openai') || '';
   }
   private getModel(): string {
     return getSetting('ai_openai_model') || 'gpt-4o-mini';
@@ -50,7 +51,7 @@ export class OpenAIProvider implements AIProvider {
         headers: { 'Authorization': `Bearer ${key}` },
       });
       return res.ok;
-    } catch { return false; }
+    } catch (e) { console.debug('[OpenAI] API validation failed:', String(e)); return false; }
   }
 
   async listModels(): Promise<string[]> {

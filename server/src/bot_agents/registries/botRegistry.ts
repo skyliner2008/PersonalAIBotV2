@@ -63,6 +63,43 @@ function safeJsonParse<T>(str: string, fallback: T): T {
   catch { return fallback; }
 }
 
+// ── LRU Cache for hot-path lookups ──────────────────
+const BOT_CACHE_MAX = 50;
+const BOT_CACHE_TTL_MS = 10_000; // 10 seconds
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+const botByIdCache = new Map<string, CacheEntry<BotInstance | null>>();
+const listBotsCache = new Map<string, CacheEntry<BotInstance[]>>();
+
+function getCached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T): void {
+  if (cache.size >= BOT_CACHE_MAX) {
+    // Evict oldest entry
+    const firstKey = cache.keys().next().value;
+    if (firstKey !== undefined) cache.delete(firstKey);
+  }
+  cache.set(key, { value, expiresAt: Date.now() + BOT_CACHE_TTL_MS });
+}
+
+/** Invalidate all bot caches (call after any write operation) */
+export function invalidateBotCache(): void {
+  botByIdCache.clear();
+  listBotsCache.clear();
+}
+
 // ── Ensure table exists ──────────────────────────────
 
 export function ensureBotTables(): void {
@@ -97,6 +134,10 @@ export function ensureBotTables(): void {
 
 /** List all bot instances (optionally filter by platform) */
 export function listBots(platform?: BotPlatform): BotInstance[] {
+  const cacheKey = platform ?? '__all__';
+  const cached = getCached(listBotsCache, cacheKey);
+  if (cached) return cached;
+
   const db = getDb();
   let rows: BotRow[];
   if (platform) {
@@ -104,14 +145,21 @@ export function listBots(platform?: BotPlatform): BotInstance[] {
   } else {
     rows = db.prepare('SELECT * FROM bot_instances ORDER BY created_at DESC').all() as BotRow[];
   }
-  return rows.map(rowToBot);
+  const result = rows.map(rowToBot);
+  setCached(listBotsCache, cacheKey, result);
+  return result;
 }
 
 /** Get a single bot by ID */
 export function getBot(id: string): BotInstance | null {
+  const cached = getCached(botByIdCache, id);
+  if (cached !== undefined) return cached;
+
   const db = getDb();
   const row = db.prepare('SELECT * FROM bot_instances WHERE id = ?').get(id) as BotRow | undefined;
-  return row ? rowToBot(row) : null;
+  const result = row ? rowToBot(row) : null;
+  setCached(botByIdCache, id, result);
+  return result;
 }
 
 /** Create a new bot instance */
@@ -140,6 +188,7 @@ export function createBot(data: {
     JSON.stringify(data.config ?? {}),
   );
 
+  invalidateBotCache();
   return getBot(data.id)!;
 }
 
@@ -176,6 +225,7 @@ export function updateBot(id: string, updates: Partial<{
   values.push(id);
 
   db.prepare(`UPDATE bot_instances SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  invalidateBotCache();
   return getBot(id);
 }
 
@@ -183,6 +233,7 @@ export function updateBot(id: string, updates: Partial<{
 export function deleteBot(id: string): boolean {
   const db = getDb();
   const result = db.prepare('DELETE FROM bot_instances WHERE id = ?').run(id);
+  invalidateBotCache();
   return result.changes > 0;
 }
 

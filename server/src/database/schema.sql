@@ -191,3 +191,78 @@ CREATE TABLE IF NOT EXISTS archival_memory (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_archival_chat ON archival_memory(chat_id, created_at);
+
+-- ============================================
+-- API Keys Management
+-- ============================================
+
+-- API Keys: encrypted credential storage (source of truth at runtime)
+CREATE TABLE IF NOT EXISTS api_keys (
+  provider_id TEXT NOT NULL PRIMARY KEY,
+  key_type TEXT DEFAULT 'api_key',
+  encrypted_value TEXT NOT NULL,
+  source TEXT DEFAULT 'dashboard' CHECK(source IN ('dashboard', 'env', 'migration')),
+  source_env_var TEXT,
+  is_valid BOOLEAN DEFAULT 1,
+  last_tested DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(provider_id, key_type)
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_valid ON api_keys(provider_id, is_valid);
+
+-- Provider Configuration: runtime settings per provider
+CREATE TABLE IF NOT EXISTS provider_config (
+  provider_id TEXT PRIMARY KEY,
+  enabled BOOLEAN DEFAULT 1,
+  priority INTEGER DEFAULT 0,
+  custom_base_url TEXT,
+  custom_models TEXT,
+  metadata TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- Agentic AI Upgrades: Plan Tracker
+-- ============================================
+
+-- Agent Plans: Stateful planning for long-running workflows
+CREATE TABLE IF NOT EXISTS agent_plans (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  steps_json TEXT NOT NULL, -- Array of { id, description, status }
+  status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'failed', 'paused')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_plans_chat ON agent_plans(chat_id, status);
+
+-- ============================================
+-- Agentic AI Upgrades: GraphRAG Memory
+-- ============================================
+
+-- Knowledge Graph Nodes (Entities)
+CREATE TABLE IF NOT EXISTS knowledge_nodes (
+  id TEXT PRIMARY KEY,       -- Format: chatId_normalizedLabel
+  chat_id TEXT NOT NULL,
+  label TEXT NOT NULL,       -- Human readable entity name (e.g. "ผู้ใช้", "โปรเจคระบบ AI")
+  node_type TEXT DEFAULT 'entity',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_knodes_chat ON knowledge_nodes(chat_id);
+
+-- Knowledge Graph Edges (Relationships)
+CREATE TABLE IF NOT EXISTS knowledge_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+  relationship TEXT NOT NULL, -- The predicate (e.g. "เป็นเจ้าของ", "ชอบ")
+  weight REAL DEFAULT 1.0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(chat_id, source_id, target_id, relationship)
+);
+CREATE INDEX IF NOT EXISTS idx_kedges_source ON knowledge_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_kedges_target ON knowledge_edges(target_id);

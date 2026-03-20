@@ -10,23 +10,176 @@ export enum TaskType {
 }
 
 export interface ModelConfig {
-  provider: 'gemini' | 'openai' | 'minimax';
+  provider: string;
   modelName: string;
+}
+
+export interface MultiModelConfig {
+  active: ModelConfig;
+  fallbacks?: ModelConfig[];
 }
 
 /**
  * Default model routing — สามารถ override ผ่าน Dashboard ได้
  */
-export const modelRouting: Record<TaskType, ModelConfig> = {
-  [TaskType.GENERAL]: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
-  [TaskType.COMPLEX]: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
-  [TaskType.VISION]: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
-  [TaskType.WEB_BROWSER]: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
-  [TaskType.THINKING]: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
-  [TaskType.CODE]: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
-  [TaskType.DATA]: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
-  [TaskType.SYSTEM]: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
+export const modelRouting: Record<TaskType, MultiModelConfig> = {
+  [TaskType.GENERAL]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
+    fallbacks: [
+      { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+      { provider: 'openai', modelName: 'gpt-4o-mini' }
+    ]
+  },
+  [TaskType.COMPLEX]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+    fallbacks: [
+      { provider: 'openai', modelName: 'gpt-4o' },
+      { provider: 'gemini', modelName: 'gemini-2.0-flash' }
+    ]
+  },
+  [TaskType.VISION]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
+    fallbacks: [
+      { provider: 'gemini', modelName: 'gemini-2.5-flash' }
+    ]
+  },
+  [TaskType.WEB_BROWSER]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.0-flash' },
+    fallbacks: [
+      { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+      { provider: 'openai', modelName: 'gpt-4o-mini' }
+    ]
+  },
+  [TaskType.THINKING]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+    fallbacks: [
+      { provider: 'openai', modelName: 'gpt-4o' }
+    ]
+  },
+  [TaskType.CODE]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+    fallbacks: [
+      { provider: 'openai', modelName: 'gpt-4o' }
+    ]
+  },
+  [TaskType.DATA]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.5-flash' },
+    fallbacks: [
+      { provider: 'openai', modelName: 'gpt-4o' }
+    ]
+  },
+  [TaskType.SYSTEM]: { 
+    active: { provider: 'gemini', modelName: 'gemini-2.0-flash-lite' },
+    fallbacks: [
+      { provider: 'gemini', modelName: 'gemini-2.0-flash' }
+    ]
+  },
 };
+
+// ============================================================
+// Adaptive Model Performance Tracker
+// — เรียนรู้จาก usage_tracking เพื่อเลือก model ดีที่สุดต่อ task type
+// ============================================================
+
+export interface ModelPerformanceEntry {
+  model: string;
+  provider: string;
+  taskType: string;
+  successRate: number;
+  avgDurationMs: number;
+  totalRuns: number;
+  score: number; // Composite score: higher = better
+}
+
+/** Cache สำหรับ performance data (refresh ทุก 10 นาที) */
+let _perfCache: ModelPerformanceEntry[] | null = null;
+let _perfCacheExpiry = 0;
+const PERF_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * ดึง model performance stats จาก usage_tracking (24h window)
+ * คำนวณ composite score = successRate × 40 + speed × 30 + volume × 30
+ */
+export function getModelPerformance(taskType?: string): ModelPerformanceEntry[] {
+  const now = Date.now();
+  if (_perfCache && now < _perfCacheExpiry) {
+    return taskType ? _perfCache.filter(p => p.taskType === taskType) : _perfCache;
+  }
+
+  try {
+    // Dynamic import to avoid circular dependency
+    let dbAll: any;
+    try {
+      const dbModule = require('../../database/db.js');
+      dbAll = dbModule.dbAll;
+    } catch { _perfCache = []; return taskType ? [] : []; }
+
+    if (!dbAll) { _perfCache = []; return taskType ? [] : []; }
+
+    const cutoff = new Date(now - 24 * 3600_000).toISOString();
+    const rows: Array<{
+      model: string; provider: string; task: string;
+      total: number; successes: number; avgMs: number;
+    }> = dbAll(`
+      SELECT model, provider, task,
+        COUNT(*) as total,
+        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes,
+        ROUND(AVG(duration_ms)) as avgMs
+      FROM usage_tracking
+      WHERE created_at >= ? AND task = 'agent'
+      GROUP BY model, provider, task
+      HAVING total >= 3
+      ORDER BY total DESC
+    `, [cutoff]);
+
+    _perfCache = rows.map((r: any) => {
+      const successRate = r.total > 0 ? r.successes / r.total : 0;
+      // Speed score: faster = higher (normalize: 0-1 where 30s+ = 0)
+      const speedScore = Math.max(0, 1 - (r.avgMs / 30_000));
+      // Volume confidence: more runs = higher confidence (cap at 50 runs)
+      const volumeScore = Math.min(r.total / 50, 1);
+      // Composite score (0-100)
+      const score = Math.round((successRate * 40) + (speedScore * 30) + (volumeScore * 30));
+
+      return {
+        model: r.model,
+        provider: r.provider,
+        taskType: r.task,
+        successRate,
+        avgDurationMs: r.avgMs,
+        totalRuns: r.total,
+        score,
+      };
+    });
+    _perfCacheExpiry = now + PERF_CACHE_TTL_MS;
+  } catch {
+    _perfCache = [];
+  }
+
+  return taskType ? (_perfCache || []).filter(p => p.taskType === taskType) : (_perfCache || []);
+}
+
+/**
+ * หา model ที่ดีที่สุดสำหรับ task type ที่ระบุ (จาก historical performance)
+ * Return null ถ้ายังไม่มีข้อมูลเพียงพอ (ใช้ default routing แทน)
+ */
+export function getBestModelForTask(taskType: string): ModelConfig | null {
+  const perf = getModelPerformance(taskType);
+  if (perf.length === 0) return null;
+
+  // เอาอันที่ score สูงสุด
+  const best = perf.sort((a, b) => b.score - a.score)[0];
+  // ต้องมี score >= 50 ถึงจะแนะนำ (ป้องกันการเปลี่ยนไปใช้ model ห่วย)
+  if (best.score < 50) return null;
+
+  return { provider: best.provider, modelName: best.model };
+}
+
+/** Invalidate performance cache (เรียกตอน self-reflection update config) */
+export function invalidatePerformanceCache(): void {
+  _perfCache = null;
+  _perfCacheExpiry = 0;
+}
 
 // ============================================================
 // Keyword scoring system — ให้คะแนนทุกประเภทแล้วเลือกที่ได้สูงสุด
@@ -90,12 +243,27 @@ export interface TaskClassification {
   secondScore: number;
 }
 
+import { classificationCache } from '../../utils/cache.js';
+
 /**
- * Smart task classification with keyword scoring + confidence
+ * Smart task classification with keyword scoring + confidence + caching + input-size awareness
  */
 export function classifyTask(message: string, hasAttachments: boolean): TaskClassification {
   if (hasAttachments) return { type: TaskType.VISION, confidence: 'high', topScore: 10, secondScore: 0 };
 
+  // Cache lookup — same message pattern → same classification
+  const cacheKey = `cls:${message.substring(0, 200).toLowerCase()}`;
+  const cached = classificationCache.get(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch { /* parse failed, recompute */ }
+  }
+
+  const result = _classifyCore(message);
+  classificationCache.set(cacheKey, JSON.stringify(result));
+  return result;
+}
+
+function _classifyCore(message: string): TaskClassification {
   const msg = message.toLowerCase();
   const scores: Record<TaskType, number> = {
     [TaskType.GENERAL]: 0,
@@ -121,6 +289,15 @@ export function classifyTask(message: string, hasAttachments: boolean): TaskClas
   // Bonus: long messages are more likely complex
   if (message.length > 300) scores[TaskType.COMPLEX] += 2;
   if (message.length > 500) scores[TaskType.COMPLEX] += 1;
+
+  // Input-size awareness: very long messages → route to THINKING/COMPLEX for deeper models
+  if (message.length > 2000) {
+    scores[TaskType.THINKING] += 2;
+    scores[TaskType.COMPLEX] += 2;
+  }
+  if (message.length > 5000) {
+    scores[TaskType.THINKING] += 3;
+  }
 
   // Sort scores descending to find top 2
   const sorted = Object.entries(scores).sort(([, a], [, b]) => (b as number) - (a as number));

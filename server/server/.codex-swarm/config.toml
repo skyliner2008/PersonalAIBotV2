@@ -1,0 +1,10 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "xhigh"
+[windows]
+sandbox = "elevated"
+
+[projects.'\\?\C:\Users\MSI\PersonalAIBotV2\server']
+trust_level = "trusted"
+
+[notice.model_migrations]
+"gpt-5.3-codex" = "gpt-5.4"

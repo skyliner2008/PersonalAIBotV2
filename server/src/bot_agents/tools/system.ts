@@ -9,8 +9,8 @@ import type { BotContext, ToolHandlerMap } from '../types.js';
 import { TaskType, type ModelConfig } from '../config/aiConfig.js';
 import { configManager } from '../config/configManager.js';
 import { getBot, updateBot } from '../registries/botRegistry.js';
-import { getAllTools, getToolsByCategory, type ToolMeta } from '../registries/toolRegistry.js';
-import { getAgentRunHistory, getAgentStats } from '../agent.js';
+import { getAllTools, type ToolMeta } from '../registries/toolRegistry.js';
+import { getAgentRunHistory, getAgentStats } from '../agentTelemetry.js';
 
 // ============================================================
 // Types for System Tool Context
@@ -30,19 +30,19 @@ export interface SystemToolContext {
 
 export const getMyConfigDeclaration: FunctionDeclaration = {
   name: 'get_my_config',
-  description: 'ดูข้อมูล config ของตัวเอง เช่น ชื่อ, platform, model ที่ใช้อยู่, จำนวน tools ที่เปิดใช้',
+  description: 'ดูข้อมูล config ของตัวเอง เช่น ชื่อ, platform, model ที่ใช้อยู่, จำนวน tools ที่เปิดใช้, และสถานะ Auto Routing',
   parameters: { type: Type.OBJECT, properties: {} },
 };
 
 export const listAvailableModelsDeclaration: FunctionDeclaration = {
   name: 'list_available_models',
-  description: 'แสดงรายการ AI model ทั้งหมดที่ใช้ได้ในระบบ จัดกลุ่มตาม provider (gemini, openai, minimax)',
+  description: 'แสดงรายการ AI model ทั้งหมดที่ใช้ได้ในระบบ จัดกลุ่มตาม provider ที่ agent ใช้งานได้ตอนนี้',
   parameters: {
     type: Type.OBJECT,
     properties: {
       provider: {
         type: Type.STRING,
-        description: 'กรอง provider ที่ต้องการ เช่น "gemini", "openai", "minimax" (ถ้าไม่ระบุจะแสดงทั้งหมด)',
+        description: 'กรอง provider ที่ต้องการ เช่น "gemini", "openai", "anthropic" หรือ provider id อื่นที่ agent ใช้ได้ (ถ้าไม่ระบุจะแสดงทั้งหมด)',
       },
     },
   },
@@ -50,7 +50,7 @@ export const listAvailableModelsDeclaration: FunctionDeclaration = {
 
 export const setMyModelDeclaration: FunctionDeclaration = {
   name: 'set_my_model',
-  description: 'เปลี่ยน AI model ที่ใช้สำหรับ task type ที่กำหนด เช่น เปลี่ยนจาก gemini-2.0-flash เป็น gpt-4o สำหรับงาน complex',
+  description: 'เปลี่ยน AI model หรือเปิด/ปิด Auto Routing สำหรับ task type ที่กำหนด',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -60,14 +60,18 @@ export const setMyModelDeclaration: FunctionDeclaration = {
       },
       provider: {
         type: Type.STRING,
-        description: 'provider: gemini, openai, minimax',
+        description: 'provider id ที่ agent ใช้งานได้ เช่น gemini, openai, minimax',
       },
       model_name: {
         type: Type.STRING,
-        description: 'ชื่อ model เช่น gemini-2.0-flash, gpt-4o, MiniMax-M2.5',
+        description: 'ชื่อ model เช่น gemini-2.0-flash, gpt-4o, abab6.5s-chat',
+      },
+      auto: {
+        type: Type.BOOLEAN,
+        description: 'ถ้า true จะเปิดใช้ adaptive routing (auto) สำหรับ bot นี้ (ถ้าใส่ auto=true ไม่ต้องระบุ provider/model)',
       },
     },
-    required: ['task_type', 'provider', 'model_name'],
+    required: ['task_type'],
   },
 };
 
@@ -109,6 +113,12 @@ export const getSessionStatsDeclaration: FunctionDeclaration = {
   parameters: { type: Type.OBJECT, properties: {} },
 };
 
+export const getSystemPathsDeclaration: FunctionDeclaration = {
+  name: 'get_system_paths',
+  description: 'ดูพาธที่สำคัญในระบบ เช่น Desktop, Documents, Downloads, Home, AppData',
+  parameters: { type: Type.OBJECT, properties: {} },
+};
+
 // ============================================================
 // All declarations for export
 // ============================================================
@@ -122,6 +132,7 @@ export const systemToolDeclarations: FunctionDeclaration[] = [
   helpDeclaration,
   getRecentErrorsDeclaration,
   getSessionStatsDeclaration,
+  getSystemPathsDeclaration,
 ];
 
 // ============================================================
@@ -129,191 +140,232 @@ export const systemToolDeclarations: FunctionDeclaration[] = [
 // ============================================================
 
 export function getSystemToolHandlers(sysCtx: SystemToolContext): ToolHandlerMap {
-  const { ctx, listModels, getProviderNames } = sysCtx;
-
   return {
-    // ── get_my_config ────────────────────────────────────
-    get_my_config: async () => {
-      const bot = getBot(ctx.botId);
-      const globalConfig = configManager.getConfig();
-      const botOverrides = (bot?.config as any)?.modelOverrides ?? {};
+    get_my_config: () => handleGetMyConfig(sysCtx),
+    list_available_models: (args) => handleListAvailableModels(sysCtx, args),
+    set_my_model: (args) => handleSetMyModel(sysCtx, args),
+    get_system_status: () => handleGetSystemStatus(sysCtx),
+    get_my_capabilities: () => handleGetMyCapabilities(sysCtx),
+    help: async () => handleHelp(),
+    get_recent_errors: (args) => handleGetRecentErrors(args),
+    get_session_stats: () => handleGetSessionStats(),
+    get_system_paths: () => handleGetSystemPaths(),
+  };
+}
 
-      // Build model config per task type (bot override → global)
-      const modelConfig: Record<string, { provider: string; modelName: string; source: string }> = {};
-      for (const tt of Object.values(TaskType)) {
-        if (botOverrides[tt]) {
-          modelConfig[tt] = { ...botOverrides[tt], source: 'bot-override' };
-        } else if (globalConfig[tt]) {
-          modelConfig[tt] = { ...globalConfig[tt], source: 'global' };
-        }
-      }
+// ── Handler Implementations ──────────────────────────────────
 
-      const result = {
-        botId: ctx.botId,
-        botName: ctx.botName,
-        platform: ctx.platform,
-        persona: bot?.persona_id ?? 'default',
-        enabledToolsCount: bot?.enabled_tools?.length ?? 0,
-        modelConfig,
-        status: bot?.status ?? 'unknown',
-        createdAt: bot?.created_at,
+async function handleGetMyConfig({ ctx, getProviderNames }: SystemToolContext) {
+  const bot = getBot(ctx.botId);
+  const globalConfig = configManager.getConfig();
+  const botConfig = (bot?.config as any) ?? {};
+  const botOverrides = botConfig.modelOverrides ?? {};
+  const botAuto = botConfig.autoRouting;
+
+  // Build model config per task type (bot override → global)
+  const modelConfig: Record<string, { provider: string; modelName: string; source: string }> = {};
+  for (const tt of Object.values(TaskType)) {
+    const route = botOverrides[tt] || globalConfig.routes[tt];
+    if (route) {
+      const active = route.active || route;
+      modelConfig[tt] = { 
+        provider: active.provider, 
+        modelName: active.modelName, 
+        source: botOverrides[tt] ? 'bot-override' : 'global' 
       };
+    }
+  }
 
-      return `🤖 ข้อมูล Config ของฉัน:\n${JSON.stringify(result, null, 2)}`;
+  const result = {
+    botId: ctx.botId,
+    botName: ctx.botName,
+    platform: ctx.platform,
+    persona: bot?.persona_id ?? 'default',
+    autoRouting: botAuto !== undefined ? botAuto : globalConfig.autoRouting,
+    globalAutoRouting: globalConfig.autoRouting,
+    enabledToolsCount: bot?.enabled_tools?.length ?? 0,
+    availableProviders: getProviderNames(),
+    modelConfig,
+    status: bot?.status ?? 'unknown',
+  };
+
+  return `🤖 ข้อมูล Config ของฉัน:\n${JSON.stringify(result, null, 2)}`;
+}
+
+async function handleListAvailableModels({ listModels, getProviderNames }: SystemToolContext, args: any) {
+  const filterProvider = args?.provider as string | undefined;
+  const providers = filterProvider ? [filterProvider] : getProviderNames();
+  const result: Record<string, string[]> = {};
+
+  for (const providerName of providers) {
+    try {
+      const models = await listModels(providerName);
+      result[providerName] = models;
+    } catch (err: any) {
+      result[providerName] = [`❌ Error: ${err.message}`];
+    }
+  }
+
+  let output = '📋 AI Models ที่ใช้ได้ในระบบ:\n';
+  for (const [provider, models] of Object.entries(result)) {
+    output += `\n🔹 ${provider.toUpperCase()} (${models.length} models):\n`;
+    output += models.map(m => `  • ${m}`).join('\n');
+  }
+
+  return output;
+}
+
+async function handleSetMyModel({ ctx, listModels, getProviderNames }: SystemToolContext, args: any) {
+  const taskType = String(args.task_type) as TaskType;
+  const provider = args.provider ? String(args.provider) : undefined;
+  const modelName = args.model_name ? String(args.model_name) : undefined;
+  const auto = args.auto !== undefined ? !!args.auto : undefined;
+
+  // Validate task type
+  if (!Object.values(TaskType).includes(taskType)) {
+    return `❌ task_type ไม่ถูกต้อง ต้องเป็น: ${Object.values(TaskType).join(', ')}`;
+  }
+
+  if (auto === undefined && (!provider || !modelName)) {
+    return `❌ กรุณาระบุ provider และ model_name หรือตั้งค่า auto=true`;
+  }
+
+  // If manual mode, validate provider
+  if (provider) {
+    const availableProviders = getProviderNames();
+    if (!availableProviders.includes(provider)) {
+      return `❌ provider ไม่ถูกต้อง ต้องเป็นหนึ่งใน: ${availableProviders.join(', ')}`;
+    }
+
+    // Validate model exists (optional check)
+    try {
+      const models = await listModels(provider);
+      if (models.length > 0 && modelName && !models.includes(modelName)) {
+        return `❌ ไม่พบ model "${modelName}" ใน ${provider}\nModels ที่ใช้ได้: ${models.slice(0, 10).join(', ')}`;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Case 1: Jarvis (Global Config)
+  if (ctx.botId === 'jarvis' || !getBot(ctx.botId)) {
+    const config = configManager.getConfig();
+    if (auto !== undefined) {
+      config.autoRouting = auto;
+    }
+    if (provider && modelName) {
+      config.routes[taskType] = { active: { provider: provider as any, modelName } };
+    }
+    configManager.updateConfig(config);
+    return `✅ อัปเดต Global Config (Jarvis) สำเร็จ!\n` +
+      `📌 Task: ${taskType}\n` +
+      (auto !== undefined ? `🔄 Auto Routing: ${auto ? 'เปิด' : 'ปิด'}\n` : '') +
+      (provider ? `🔄 Model: ${provider}/${modelName}\n` : '') +
+      `💡 มีผลต่อ Agent ทุกตัวที่ใช้ค่า Global`;
+  }
+
+  // Case 2: Specific Bot (LINE/Telegram)
+  const bot = getBot(ctx.botId)!;
+  const currentConfig = (bot.config ?? {}) as any;
+  
+  if (auto !== undefined) {
+    currentConfig.autoRouting = auto;
+  }
+  
+  if (provider && modelName) {
+    const modelOverrides = currentConfig.modelOverrides ?? {};
+    modelOverrides[taskType] = { provider: provider as any, modelName };
+    currentConfig.modelOverrides = modelOverrides;
+  }
+
+  updateBot(ctx.botId, { config: currentConfig });
+
+  return `✅ เปลี่ยน model ของบอท "${ctx.botName}" สำเร็จ!\n` +
+    `📌 Task: ${taskType}\n` +
+    (auto !== undefined ? `🔄 Auto Routing: ${auto ? 'เปิด' : 'ปิด'}\n` : '') +
+    (provider ? `🔄 Model: ${provider}/${modelName}\n` : '') +
+    `💡 การเปลี่ยนจะมีผลตั้งแต่ข้อความถัดไป`;
+}
+
+async function handleGetSystemStatus({ listModels, getProviderNames }: SystemToolContext) {
+  const uptimeSeconds = Math.floor(process.uptime());
+  const hours = Math.floor(uptimeSeconds / 3600);
+  const mins = Math.floor((uptimeSeconds % 3600) / 60);
+
+  // Check available providers
+  const providerStatus: Record<string, string> = {};
+  for (const p of getProviderNames()) {
+    try {
+      const models = await listModels(p);
+      providerStatus[p] = `✅ Active (${models.length} models)`;
+    } catch {
+      providerStatus[p] = '❌ Unavailable';
+    }
+  }
+
+  // Memory usage
+  const mem = process.memoryUsage();
+  const memMB = {
+    rss: Math.round(mem.rss / 1024 / 1024),
+    heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+  };
+
+  // Agent stats
+  const agentStats = getAgentStats();
+
+  const result = {
+    uptime: `${hours}h ${mins}m`,
+    providers: providerStatus,
+    memory: `${memMB.heapUsed}MB / ${memMB.heapTotal}MB (RSS: ${memMB.rss}MB)`,
+    agentStats: {
+      totalRuns: agentStats.totalRuns,
+      activeRuns: agentStats.activeRuns,
+      avgDuration: `${agentStats.avgDurationMs}ms`,
+      avgTokens: agentStats.avgTokens,
+      totalToolCalls: agentStats.totalToolCalls,
     },
+    nodeVersion: process.version,
+  };
 
-    // ── list_available_models ─────────────────────────────
-    list_available_models: async (args) => {
-      const filterProvider = args?.provider as string | undefined;
-      const providers = filterProvider ? [filterProvider] : getProviderNames();
-      const result: Record<string, string[]> = {};
+  return `📊 สถานะระบบ:\n${JSON.stringify(result, null, 2)}`;
+}
 
-      for (const providerName of providers) {
-        try {
-          const models = await listModels(providerName);
-          result[providerName] = models;
-        } catch (err: any) {
-          result[providerName] = [`❌ Error: ${err.message}`];
-        }
-      }
+async function handleGetMyCapabilities({ ctx }: SystemToolContext) {
+  const bot = getBot(ctx.botId);
+  const enabledToolNames = bot?.enabled_tools ?? [];
+  const allTools = getAllTools();
 
-      let output = '📋 AI Models ที่ใช้ได้ในระบบ:\n';
-      for (const [provider, models] of Object.entries(result)) {
-        output += `\n🔹 ${provider.toUpperCase()} (${models.length} models):\n`;
-        output += models.map(m => `  • ${m}`).join('\n');
-      }
+  // Group enabled tools by category
+  const grouped: Record<string, ToolMeta[]> = {};
+  for (const tool of allTools) {
+    if (enabledToolNames.includes(tool.name)) {
+      if (!grouped[tool.category]) grouped[tool.category] = [];
+      grouped[tool.category].push(tool);
+    }
+  }
 
-      return output;
-    },
+  const categoryEmojis: Record<string, string> = {
+    utility: '🔧', os: '💻', file: '📁', browser: '🌐',
+    web: '🔍', memory: '🧠', communication: '💬', system: '⚙️',
+  };
 
-    // ── set_my_model ─────────────────────────────────────
-    set_my_model: async (args) => {
-      const taskType = String(args.task_type) as TaskType;
-      const provider = String(args.provider);
-      const modelName = String(args.model_name);
+  let output = `🤖 ความสามารถของ ${ctx.botName}:\n`;
+  output += `Platform: ${ctx.platform} | Tools: ${enabledToolNames.length}/${allTools.length}\n\n`;
 
-      // Validate task type
-      if (!Object.values(TaskType).includes(taskType)) {
-        return `❌ task_type ไม่ถูกต้อง ต้องเป็น: ${Object.values(TaskType).join(', ')}`;
-      }
+  for (const [category, tools] of Object.entries(grouped)) {
+    const emoji = categoryEmojis[category] || '📦';
+    output += `${emoji} ${category.toUpperCase()} (${tools.length}):\n`;
+    for (const tool of tools) {
+      output += `  • ${tool.displayName}: ${tool.description}\n`;
+    }
+    output += '\n';
+  }
 
-      // Validate provider
-      if (!['gemini', 'openai', 'minimax'].includes(provider)) {
-        return `❌ provider ไม่ถูกต้อง ต้องเป็น: gemini, openai, minimax`;
-      }
+  return output;
+}
 
-      // Validate model exists
-      try {
-        const models = await listModels(provider);
-        if (models.length > 0 && !models.includes(modelName)) {
-          return `❌ ไม่พบ model "${modelName}" ใน ${provider}\nModels ที่ใช้ได้: ${models.slice(0, 10).join(', ')}`;
-        }
-      } catch {
-        // Can't verify — proceed anyway (model list may be unavailable)
-      }
-
-      // Update bot config
-      const bot = getBot(ctx.botId);
-      if (!bot) {
-        return `❌ ไม่พบ bot ID: ${ctx.botId}`;
-      }
-
-      const currentConfig = (bot.config ?? {}) as Record<string, unknown>;
-      const modelOverrides = (currentConfig.modelOverrides ?? {}) as Record<string, ModelConfig>;
-      modelOverrides[taskType] = { provider: provider as any, modelName };
-      currentConfig.modelOverrides = modelOverrides;
-
-      updateBot(ctx.botId, { config: currentConfig });
-
-      return `✅ เปลี่ยน model สำเร็จ!\n` +
-        `📌 Task: ${taskType}\n` +
-        `🔄 Model: ${provider}/${modelName}\n` +
-        `💡 การเปลี่ยนจะมีผลตั้งแต่ข้อความถัดไป`;
-    },
-
-    // ── get_system_status ─────────────────────────────────
-    get_system_status: async () => {
-      const uptimeSeconds = Math.floor(process.uptime());
-      const hours = Math.floor(uptimeSeconds / 3600);
-      const mins = Math.floor((uptimeSeconds % 3600) / 60);
-
-      // Check available providers
-      const providerStatus: Record<string, string> = {};
-      for (const p of getProviderNames()) {
-        try {
-          const models = await listModels(p);
-          providerStatus[p] = `✅ Active (${models.length} models)`;
-        } catch {
-          providerStatus[p] = '❌ Unavailable';
-        }
-      }
-
-      // Memory usage
-      const mem = process.memoryUsage();
-      const memMB = {
-        rss: Math.round(mem.rss / 1024 / 1024),
-        heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
-        heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
-      };
-
-      // Agent stats
-      const agentStats = getAgentStats();
-
-      const result = {
-        uptime: `${hours}h ${mins}m`,
-        providers: providerStatus,
-        memory: `${memMB.heapUsed}MB / ${memMB.heapTotal}MB (RSS: ${memMB.rss}MB)`,
-        agentStats: {
-          totalRuns: agentStats.totalRuns,
-          activeRuns: agentStats.activeRuns,
-          avgDuration: `${agentStats.avgDurationMs}ms`,
-          avgTokens: agentStats.avgTokens,
-          totalToolCalls: agentStats.totalToolCalls,
-        },
-        nodeVersion: process.version,
-      };
-
-      return `📊 สถานะระบบ:\n${JSON.stringify(result, null, 2)}`;
-    },
-
-    // ── get_my_capabilities ──────────────────────────────
-    get_my_capabilities: async () => {
-      const bot = getBot(ctx.botId);
-      const enabledToolNames = bot?.enabled_tools ?? [];
-      const allTools = getAllTools();
-
-      // Group enabled tools by category
-      const grouped: Record<string, ToolMeta[]> = {};
-      for (const tool of allTools) {
-        if (enabledToolNames.includes(tool.name)) {
-          if (!grouped[tool.category]) grouped[tool.category] = [];
-          grouped[tool.category].push(tool);
-        }
-      }
-
-      const categoryEmojis: Record<string, string> = {
-        utility: '🔧', os: '💻', file: '📁', browser: '🌐',
-        web: '🔍', memory: '🧠', communication: '💬', system: '⚙️',
-      };
-
-      let output = `🤖 ความสามารถของ ${ctx.botName}:\n`;
-      output += `Platform: ${ctx.platform} | Tools: ${enabledToolNames.length}/${allTools.length}\n\n`;
-
-      for (const [category, tools] of Object.entries(grouped)) {
-        const emoji = categoryEmojis[category] || '📦';
-        output += `${emoji} ${category.toUpperCase()} (${tools.length}):\n`;
-        for (const tool of tools) {
-          output += `  • ${tool.displayName}: ${tool.description}\n`;
-        }
-        output += '\n';
-      }
-
-      return output;
-    },
-
-    // ── help ─────────────────────────────────────────────
-    help: async () => {
-      return `📖 คู่มือการใช้งาน AI Agent
+async function handleHelp() {
+  return `📖 คู่มือการใช้งาน AI Agent
 
 🤖 ฉันเป็น Personal AI Agent ที่ทำงานหลายขั้นตอนได้ด้วยตัวเอง
 
@@ -349,83 +401,100 @@ export function getSystemToolHandlers(sysCtx: SystemToolContext): ToolHandlerMap
   • web → ค้นหาข้อมูล
 
 💡 ใช้ get_my_config เพื่อดู model แต่ละประเภท
-💡 ใช้ set_my_model เพื่อเปลี่ยน model ตามต้องการ`;
+💡 ใช้ set_my_model เพื่อเปลี่ยน model ตามต้องการ
+💡 ใช้ set_my_model(auto=true) เพื่อให้ระบบเลือก model อัตโนมัติ`;
+}
+
+async function handleGetRecentErrors(args: any) {
+  const limit = Number(args?.limit) || 10;
+  const runs = getAgentRunHistory();
+  const errors = runs.filter((r: any) => r.error).slice(0, limit);
+
+  if (errors.length === 0) {
+    return '✅ ไม่พบข้อผิดพลาดล่าสุด ระบบทำงานปกติ';
+  }
+
+  let output = `⚠️ ข้อผิดพลาดล่าสุด (${errors.length} รายการ):\n\n`;
+  for (const run of errors) {
+    const time = new Date(run.startTime).toLocaleString('th-TH');
+    output += `🔴 ${time}\n`;
+    output += `  Task: ${run.taskType} | Turns: ${run.turns}\n`;
+    output += `  Error: ${run.error}\n`;
+    output += `  Message: "${run.message}"\n\n`;
+  }
+
+  return output;
+}
+
+async function handleGetSessionStats() {
+  const stats = getAgentStats();
+  const runs = getAgentRunHistory();
+  const recentRuns = runs.slice(0, 20);
+
+  // Calculate per-task-type stats
+  const taskTypeStats: Record<string, { count: number; avgTokens: number; avgDuration: number }> = {};
+  for (const run of runs) {
+    const tt = run.taskType || 'unknown';
+    if (!taskTypeStats[tt]) taskTypeStats[tt] = { count: 0, avgTokens: 0, avgDuration: 0 };
+    taskTypeStats[tt].count++;
+    taskTypeStats[tt].avgTokens += run.totalTokens;
+    taskTypeStats[tt].avgDuration += run.durationMs || 0;
+  }
+  for (const tt of Object.keys(taskTypeStats)) {
+    const s = taskTypeStats[tt];
+    s.avgTokens = Math.round(s.avgTokens / s.count);
+    s.avgDuration = Math.round(s.avgDuration / s.count);
+  }
+
+  // Tool usage frequency
+  const toolUsage: Record<string, number> = {};
+  for (const run of runs) {
+    for (const tc of run.toolCalls) {
+      toolUsage[tc.name] = (toolUsage[tc.name] || 0) + 1;
+    }
+  }
+  const topTools = Object.entries(toolUsage)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  const result = {
+    overview: {
+      totalRuns: stats.totalRuns,
+      activeRuns: stats.activeRuns,
+      avgDuration: `${stats.avgDurationMs}ms`,
+      avgTokens: stats.avgTokens,
+      totalToolCalls: stats.totalToolCalls,
     },
-
-    // ── get_recent_errors ─────────────────────────────────
-    get_recent_errors: async (args) => {
-      const limit = Number(args?.limit) || 10;
-      const runs = getAgentRunHistory();
-      const errors = runs.filter(r => r.error).slice(0, limit);
-
-      if (errors.length === 0) {
-        return '✅ ไม่พบข้อผิดพลาดล่าสุด ระบบทำงานปกติ';
-      }
-
-      let output = `⚠️ ข้อผิดพลาดล่าสุด (${errors.length} รายการ):\n\n`;
-      for (const run of errors) {
-        const time = new Date(run.startTime).toLocaleString('th-TH');
-        output += `🔴 ${time}\n`;
-        output += `  Task: ${run.taskType} | Turns: ${run.turns}\n`;
-        output += `  Error: ${run.error}\n`;
-        output += `  Message: "${run.message}"\n\n`;
-      }
-
-      return output;
-    },
-
-    // ── get_session_stats ─────────────────────────────────
-    get_session_stats: async () => {
-      const stats = getAgentStats();
-      const runs = getAgentRunHistory();
-      const recentRuns = runs.slice(0, 20);
-
-      // Calculate per-task-type stats
-      const taskTypeStats: Record<string, { count: number; avgTokens: number; avgDuration: number }> = {};
-      for (const run of runs) {
-        const tt = run.taskType || 'unknown';
-        if (!taskTypeStats[tt]) taskTypeStats[tt] = { count: 0, avgTokens: 0, avgDuration: 0 };
-        taskTypeStats[tt].count++;
-        taskTypeStats[tt].avgTokens += run.totalTokens;
-        taskTypeStats[tt].avgDuration += run.durationMs || 0;
-      }
-      for (const tt of Object.keys(taskTypeStats)) {
-        const s = taskTypeStats[tt];
-        s.avgTokens = Math.round(s.avgTokens / s.count);
-        s.avgDuration = Math.round(s.avgDuration / s.count);
-      }
-
-      // Tool usage frequency
-      const toolUsage: Record<string, number> = {};
-      for (const run of runs) {
-        for (const tc of run.toolCalls) {
-          toolUsage[tc.name] = (toolUsage[tc.name] || 0) + 1;
-        }
-      }
-      const topTools = Object.entries(toolUsage)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
-
-      const result = {
-        overview: {
-          totalRuns: stats.totalRuns,
-          activeRuns: stats.activeRuns,
-          avgDuration: `${stats.avgDurationMs}ms`,
-          avgTokens: stats.avgTokens,
-          totalToolCalls: stats.totalToolCalls,
-        },
-        taskTypeBreakdown: taskTypeStats,
-        topToolsUsed: Object.fromEntries(topTools),
-        recentActivity: recentRuns.slice(0, 5).map(r => ({
-          time: new Date(r.startTime).toLocaleString('th-TH'),
-          task: r.taskType,
-          tokens: r.totalTokens,
-          tools: r.toolCalls.length,
-          success: !r.error,
-        })),
-      };
-
-      return `📈 สถิติการทำงาน:\n${JSON.stringify(result, null, 2)}`;
-    },
+    taskTypeBreakdown: taskTypeStats,
+    topToolsUsed: Object.fromEntries(topTools),
+    recentActivity: recentRuns.slice(0, 5).map((r: any) => ({
+      time: new Date(r.startTime).toLocaleString('th-TH'),
+      task: r.taskType,
+      tokens: r.totalTokens,
+      tools: r.toolCalls.length,
+      success: !r.error,
+    })),
   };
+
+  return `📈 สถิติการทำงาน:\n${JSON.stringify(result, null, 2)}`;
+}
+
+async function handleGetSystemPaths() {
+  const os = await import('os');
+  const path = await import('path');
+  
+  const home = os.homedir();
+  const paths = {
+    home,
+    desktop: path.join(home, 'Desktop'),
+    documents: path.join(home, 'Documents'),
+    downloads: path.join(home, 'Downloads'),
+    pictures: path.join(home, 'Pictures'),
+    videos: path.join(home, 'Videos'),
+    temp: os.tmpdir(),
+    cwd: process.cwd(),
+    appData: process.env.APPDATA || (process.platform === 'darwin' ? path.join(home, 'Library', 'Preferences') : path.join(home, '.local', 'share')),
+  };
+
+  return `🏠 พาธสำคัญในระบบที่คุณสามารถเข้าถึงได้:\n${JSON.stringify(paths, null, 2)}`;
 }

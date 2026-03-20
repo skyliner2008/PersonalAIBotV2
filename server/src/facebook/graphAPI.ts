@@ -3,7 +3,8 @@
 // Send messages, manage posts, comments via Graph API
 // ============================================================
 
-import { addLog, getSetting, setSetting } from '../database/db.js';
+import { addLog, getSetting } from '../database/db.js';
+import { getManagedSetting } from '../config/settingsSecurity.js';
 import type {
   FBPage,
   FBPost,
@@ -18,10 +19,10 @@ const DEFAULT_API_VERSION = 'v19.0';
 export function getFBConfig(): FBApiConfig {
   return {
     appId: getSetting('fb_app_id') || process.env.FB_APP_ID || '',
-    appSecret: getSetting('fb_app_secret') || process.env.FB_APP_SECRET || '',
-    pageAccessToken: getSetting('fb_page_access_token') || process.env.FB_PAGE_ACCESS_TOKEN || '',
+    appSecret: getManagedSetting('fb_app_secret') || process.env.FB_APP_SECRET || '',
+    pageAccessToken: getManagedSetting('fb_page_access_token') || process.env.FB_PAGE_ACCESS_TOKEN || '',
     pageId: getSetting('fb_page_id') || process.env.FB_PAGE_ID || '',
-    verifyToken: getSetting('fb_verify_token') || process.env.FB_VERIFY_TOKEN || '',
+    verifyToken: getManagedSetting('fb_verify_token') || process.env.FB_VERIFY_TOKEN || '',
     apiVersion: getSetting('fb_api_version') || DEFAULT_API_VERSION,
   };
 }
@@ -78,34 +79,44 @@ async function graphFetch<T>(
 // ============================================================
 
 export async function sendMessage(recipientId: string, text: string): Promise<FBSendResponse | null> {
-  const cfg = getFBConfig();
-  const result = await graphFetch<FBSendResponse>(
-    `/${cfg.pageId}/messages`,
-    'POST',
-    {
-      recipient: { id: recipientId },
-      message: { text },
-      messaging_type: 'RESPONSE',
-    }
-  );
+  try {
+    const cfg = getFBConfig();
+    const result = await graphFetch<FBSendResponse>(
+      `/${cfg.pageId}/messages`,
+      'POST',
+      {
+        recipient: { id: recipientId },
+        message: { text },
+        messaging_type: 'RESPONSE',
+      }
+    );
 
-  if (result) {
-    addLog('fb-api', 'Message sent', `To: ${recipientId}, Text: "${text.substring(0, 50)}"`, 'success');
+    if (result) {
+      addLog('fb-api', 'Message sent', `To: ${recipientId}, Text: "${text.substring(0, 50)}"`, 'success');
+    }
+    return result;
+  } catch (error: any) {
+    addLog('fb-api', 'sendMessage Error', error.message, 'error');
+    return null;
   }
-  return result;
 }
 
 export async function sendTypingAction(recipientId: string, action: 'typing_on' | 'typing_off' = 'typing_on'): Promise<boolean> {
-  const cfg = getFBConfig();
-  const result = await graphFetch<{ recipient_id: string }>(
-    `/${cfg.pageId}/messages`,
-    'POST',
-    {
-      recipient: { id: recipientId },
-      sender_action: action,
-    }
-  );
-  return !!result;
+  try {
+    const cfg = getFBConfig();
+    const result = await graphFetch<{ recipient_id: string }>(
+      `/${cfg.pageId}/messages`,
+      'POST',
+      {
+        recipient: { id: recipientId },
+        sender_action: action,
+      }
+    );
+    return !!result;
+  } catch (error: any) {
+    addLog('fb-api', 'sendTypingAction Error', error.message, 'error');
+    return false;
+  }
 }
 
 // ============================================================
@@ -113,21 +124,31 @@ export async function sendTypingAction(recipientId: string, action: 'typing_on' 
 // ============================================================
 
 export async function getPageInfo(): Promise<FBPage | null> {
-  const cfg = getFBConfig();
-  if (!cfg.pageId) return null;
-  return graphFetch<FBPage>(
-    `/${cfg.pageId}?fields=id,name,category,picture,fan_count`
-  );
+  try {
+    const cfg = getFBConfig();
+    if (!cfg.pageId) return null;
+    return await graphFetch<FBPage>(
+      `/${cfg.pageId}?fields=id,name,category,picture,fan_count`
+    );
+  } catch (error: any) {
+    addLog('fb-api', 'getPageInfo Error', error.message, 'error');
+    return null;
+  }
 }
 
 export async function getConnectedPages(userAccessToken: string): Promise<FBPage[]> {
-  const result = await graphFetch<{ data: FBPage[] }>(
-    '/me/accounts?fields=id,name,category,access_token,picture',
-    'GET',
-    undefined,
-    userAccessToken
-  );
-  return result?.data || [];
+  try {
+    const result = await graphFetch<{ data: FBPage[] }>(
+      '/me/accounts?fields=id,name,category,access_token,picture',
+      'GET',
+      undefined,
+      userAccessToken
+    );
+    return result?.data || [];
+  } catch (error: any) {
+    addLog('fb-api', 'getConnectedPages Error', error.message, 'error');
+    return [];
+  }
 }
 
 // ============================================================
@@ -135,38 +156,53 @@ export async function getConnectedPages(userAccessToken: string): Promise<FBPage
 // ============================================================
 
 export async function getPagePosts(limit: number = 10): Promise<FBPost[]> {
-  const cfg = getFBConfig();
-  const result = await graphFetch<{ data: FBPost[] }>(
-    `/${cfg.pageId}/posts?fields=id,message,created_time,full_picture,permalink_url,likes.summary(true),comments.summary(true),shares&limit=${limit}`
-  );
-  return result?.data || [];
+  try {
+    const cfg = getFBConfig();
+    const result = await graphFetch<{ data: FBPost[] }>(
+      `/${cfg.pageId}/posts?fields=id,message,created_time,full_picture,permalink_url,likes.summary(true),comments.summary(true),shares&limit=${limit}`
+    );
+    return result?.data || [];
+  } catch (error: any) {
+    addLog('fb-api', 'getPagePosts Error', error.message, 'error');
+    return [];
+  }
 }
 
 export async function createPagePost(message: string, link?: string, imageUrl?: string): Promise<FBPost | null> {
-  const cfg = getFBConfig();
-  const body: Record<string, unknown> = { message };
-  if (link) body.link = link;
+  try {
+    const cfg = getFBConfig();
+    const body: Record<string, unknown> = { message };
+    if (link) body.link = link;
 
-  let endpoint = `/${cfg.pageId}/feed`;
+    let endpoint = `/${cfg.pageId}/feed`;
 
-  // If image URL, use photos endpoint
-  if (imageUrl) {
-    endpoint = `/${cfg.pageId}/photos`;
-    body.url = imageUrl;
-    body.caption = message;
-    delete body.message;
+    // If image URL, use photos endpoint
+    if (imageUrl) {
+      endpoint = `/${cfg.pageId}/photos`;
+      body.url = imageUrl;
+      body.caption = message;
+      delete body.message;
+    }
+
+    const result = await graphFetch<FBPost>(endpoint, 'POST', body);
+    if (result) {
+      addLog('fb-api', 'Post created', `ID: ${result.id}`, 'success');
+    }
+    return result;
+  } catch (error: any) {
+    addLog('fb-api', 'createPagePost Error', error.message, 'error');
+    return null;
   }
-
-  const result = await graphFetch<FBPost>(endpoint, 'POST', body);
-  if (result) {
-    addLog('fb-api', 'Post created', `ID: ${result.id}`, 'success');
-  }
-  return result;
 }
 
 export async function deletePost(postId: string): Promise<boolean> {
-  const result = await graphFetch<{ success: boolean }>(`/${postId}`, 'DELETE');
-  return result?.success || false;
+  try {
+    const result = await graphFetch<{ success: boolean }>(`/${postId}`, 'DELETE');
+    return result?.success || false;
+  } catch (error: any) {
+    addLog('fb-api', 'deletePost Error', error.message, 'error');
+    return false;
+  }
 }
 
 // ============================================================
@@ -174,27 +210,42 @@ export async function deletePost(postId: string): Promise<boolean> {
 // ============================================================
 
 export async function getPostComments(postId: string, limit: number = 25): Promise<FBComment[]> {
-  const result = await graphFetch<{ data: FBComment[] }>(
-    `/${postId}/comments?fields=id,message,from,created_time,like_count,comment_count,parent&limit=${limit}`
-  );
-  return result?.data || [];
+  try {
+    const result = await graphFetch<{ data: FBComment[] }>(
+      `/${postId}/comments?fields=id,message,from,created_time,like_count,comment_count,parent&limit=${limit}`
+    );
+    return result?.data || [];
+  } catch (error: any) {
+    addLog('fb-api', 'getPostComments Error', error.message, 'error');
+    return [];
+  }
 }
 
 export async function replyToComment(commentId: string, message: string): Promise<FBComment | null> {
-  const result = await graphFetch<FBComment>(
-    `/${commentId}/comments`,
-    'POST',
-    { message }
-  );
-  if (result) {
-    addLog('fb-api', 'Comment replied', `To: ${commentId}, Text: "${message.substring(0, 50)}"`, 'success');
+  try {
+    const result = await graphFetch<FBComment>(
+      `/${commentId}/comments`,
+      'POST',
+      { message }
+    );
+    if (result) {
+      addLog('fb-api', 'Comment replied', `To: ${commentId}, Text: "${message.substring(0, 50)}"`, 'success');
+    }
+    return result;
+  } catch (error: any) {
+    addLog('fb-api', 'replyToComment Error', error.message, 'error');
+    return null;
   }
-  return result;
 }
 
 export async function likeComment(commentId: string): Promise<boolean> {
-  const result = await graphFetch<{ success: boolean }>(`/${commentId}/likes`, 'POST');
-  return result?.success || false;
+  try {
+    const result = await graphFetch<{ success: boolean }>(`/${commentId}/likes`, 'POST');
+    return result?.success || false;
+  } catch (error: any) {
+    addLog('fb-api', 'likeComment Error', error.message, 'error');
+    return false;
+  }
 }
 
 // ============================================================
@@ -202,18 +253,28 @@ export async function likeComment(commentId: string): Promise<boolean> {
 // ============================================================
 
 export async function getPageConversations(limit: number = 20): Promise<any[]> {
-  const cfg = getFBConfig();
-  const result = await graphFetch<{ data: any[] }>(
-    `/${cfg.pageId}/conversations?fields=id,participants,updated_time,snippet,unread_count,message_count&limit=${limit}`
-  );
-  return result?.data || [];
+  try {
+    const cfg = getFBConfig();
+    const result = await graphFetch<{ data: any[] }>(
+      `/${cfg.pageId}/conversations?fields=id,participants,updated_time,snippet,unread_count,message_count&limit=${limit}`
+    );
+    return result?.data || [];
+  } catch (error: any) {
+    addLog('fb-api', 'getPageConversations Error', error.message, 'error');
+    return [];
+  }
 }
 
 export async function getConversationMessages(conversationId: string, limit: number = 20): Promise<any[]> {
-  const result = await graphFetch<{ data: any[] }>(
-    `/${conversationId}/messages?fields=id,message,from,created_time,attachments&limit=${limit}`
-  );
-  return result?.data || [];
+  try {
+    const result = await graphFetch<{ data: any[] }>(
+      `/${conversationId}/messages?fields=id,message,from,created_time,attachments&limit=${limit}`
+    );
+    return result?.data || [];
+  } catch (error: any) {
+    addLog('fb-api', 'getConversationMessages Error', error.message, 'error');
+    return [];
+  }
 }
 
 // ============================================================
@@ -262,17 +323,22 @@ export async function exchangeForLongLivedToken(shortLivedToken: string): Promis
 // ============================================================
 
 export async function subscribeAppToPage(): Promise<boolean> {
-  const cfg = getFBConfig();
-  const result = await graphFetch<{ success: boolean }>(
-    `/${cfg.pageId}/subscribed_apps`,
-    'POST',
-    {
-      subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,feed',
-    }
-  );
+  try {
+    const cfg = getFBConfig();
+    const result = await graphFetch<{ success: boolean }>(
+      `/${cfg.pageId}/subscribed_apps`,
+      'POST',
+      {
+        subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,feed',
+      }
+    );
 
-  if (result?.success) {
-    addLog('fb-api', 'Webhook subscribed', `Page ${cfg.pageId} subscribed to app`, 'success');
+    if (result?.success) {
+      addLog('fb-api', 'Webhook subscribed', `Page ${cfg.pageId} subscribed to app`, 'success');
+    }
+    return result?.success || false;
+  } catch (error: any) {
+    addLog('fb-api', 'subscribeAppToPage Error', error.message, 'error');
+    return false;
   }
-  return result?.success || false;
 }

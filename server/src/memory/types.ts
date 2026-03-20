@@ -42,6 +42,8 @@ export interface MemoryContext {
     tokenEstimate: number;
     /** Conversation summary (auto-generated) */
     conversationSummary: string;
+    /** GraphRAG relational context (optional) */
+    graphContext?: string;
     /** Stats about memory layers */
     stats: {
         coreBlocks: number;
@@ -60,4 +62,6 @@ export interface BuildContextOptions {
     archivalThreshold?: number;
     /** Skip archival search (for simple queries) */
     skipArchival?: boolean;
+    /** Model context window size in tokens — used for dynamic budget allocation */
+    modelContextWindow?: number;
 }

@@ -3,15 +3,16 @@
 // Send messages, manage posts, comments via Graph API
 // ============================================================
 import { addLog, getSetting } from '../database/db.js';
+import { getManagedSetting } from '../config/settingsSecurity.js';
 const DEFAULT_API_VERSION = 'v19.0';
 // ---- Config helpers ----
 export function getFBConfig() {
     return {
         appId: getSetting('fb_app_id') || process.env.FB_APP_ID || '',
-        appSecret: getSetting('fb_app_secret') || process.env.FB_APP_SECRET || '',
-        pageAccessToken: getSetting('fb_page_access_token') || process.env.FB_PAGE_ACCESS_TOKEN || '',
+        appSecret: getManagedSetting('fb_app_secret') || process.env.FB_APP_SECRET || '',
+        pageAccessToken: getManagedSetting('fb_page_access_token') || process.env.FB_PAGE_ACCESS_TOKEN || '',
         pageId: getSetting('fb_page_id') || process.env.FB_PAGE_ID || '',
-        verifyToken: getSetting('fb_verify_token') || process.env.FB_VERIFY_TOKEN || 'fbai_verify_2024',
+        verifyToken: getManagedSetting('fb_verify_token') || process.env.FB_VERIFY_TOKEN || '',
         apiVersion: getSetting('fb_api_version') || DEFAULT_API_VERSION,
     };
 }
@@ -53,98 +54,170 @@ async function graphFetch(endpoint, method = 'GET', body, customToken) {
 // MESSAGING — Send Message via Conversations API
 // ============================================================
 export async function sendMessage(recipientId, text) {
-    const cfg = getFBConfig();
-    const result = await graphFetch(`/${cfg.pageId}/messages`, 'POST', {
-        recipient: { id: recipientId },
-        message: { text },
-        messaging_type: 'RESPONSE',
-    });
-    if (result) {
-        addLog('fb-api', 'Message sent', `To: ${recipientId}, Text: "${text.substring(0, 50)}"`, 'success');
+    try {
+        const cfg = getFBConfig();
+        const result = await graphFetch(`/${cfg.pageId}/messages`, 'POST', {
+            recipient: { id: recipientId },
+            message: { text },
+            messaging_type: 'RESPONSE',
+        });
+        if (result) {
+            addLog('fb-api', 'Message sent', `To: ${recipientId}, Text: "${text.substring(0, 50)}"`, 'success');
+        }
+        return result;
     }
-    return result;
+    catch (error) {
+        addLog('fb-api', 'sendMessage Error', error.message, 'error');
+        return null;
+    }
 }
 export async function sendTypingAction(recipientId, action = 'typing_on') {
-    const cfg = getFBConfig();
-    const result = await graphFetch(`/${cfg.pageId}/messages`, 'POST', {
-        recipient: { id: recipientId },
-        sender_action: action,
-    });
-    return !!result;
+    try {
+        const cfg = getFBConfig();
+        const result = await graphFetch(`/${cfg.pageId}/messages`, 'POST', {
+            recipient: { id: recipientId },
+            sender_action: action,
+        });
+        return !!result;
+    }
+    catch (error) {
+        addLog('fb-api', 'sendTypingAction Error', error.message, 'error');
+        return false;
+    }
 }
 // ============================================================
 // PAGES — Get page info & connected pages
 // ============================================================
 export async function getPageInfo() {
-    const cfg = getFBConfig();
-    if (!cfg.pageId)
+    try {
+        const cfg = getFBConfig();
+        if (!cfg.pageId)
+            return null;
+        return await graphFetch(`/${cfg.pageId}?fields=id,name,category,picture,fan_count`);
+    }
+    catch (error) {
+        addLog('fb-api', 'getPageInfo Error', error.message, 'error');
         return null;
-    return graphFetch(`/${cfg.pageId}?fields=id,name,category,picture,fan_count`);
+    }
 }
 export async function getConnectedPages(userAccessToken) {
-    const result = await graphFetch('/me/accounts?fields=id,name,category,access_token,picture', 'GET', undefined, userAccessToken);
-    return result?.data || [];
+    try {
+        const result = await graphFetch('/me/accounts?fields=id,name,category,access_token,picture', 'GET', undefined, userAccessToken);
+        return result?.data || [];
+    }
+    catch (error) {
+        addLog('fb-api', 'getConnectedPages Error', error.message, 'error');
+        return [];
+    }
 }
 // ============================================================
 // POSTS — Create, read, delete
 // ============================================================
 export async function getPagePosts(limit = 10) {
-    const cfg = getFBConfig();
-    const result = await graphFetch(`/${cfg.pageId}/posts?fields=id,message,created_time,full_picture,permalink_url,likes.summary(true),comments.summary(true),shares&limit=${limit}`);
-    return result?.data || [];
+    try {
+        const cfg = getFBConfig();
+        const result = await graphFetch(`/${cfg.pageId}/posts?fields=id,message,created_time,full_picture,permalink_url,likes.summary(true),comments.summary(true),shares&limit=${limit}`);
+        return result?.data || [];
+    }
+    catch (error) {
+        addLog('fb-api', 'getPagePosts Error', error.message, 'error');
+        return [];
+    }
 }
 export async function createPagePost(message, link, imageUrl) {
-    const cfg = getFBConfig();
-    const body = { message };
-    if (link)
-        body.link = link;
-    let endpoint = `/${cfg.pageId}/feed`;
-    // If image URL, use photos endpoint
-    if (imageUrl) {
-        endpoint = `/${cfg.pageId}/photos`;
-        body.url = imageUrl;
-        body.caption = message;
-        delete body.message;
+    try {
+        const cfg = getFBConfig();
+        const body = { message };
+        if (link)
+            body.link = link;
+        let endpoint = `/${cfg.pageId}/feed`;
+        // If image URL, use photos endpoint
+        if (imageUrl) {
+            endpoint = `/${cfg.pageId}/photos`;
+            body.url = imageUrl;
+            body.caption = message;
+            delete body.message;
+        }
+        const result = await graphFetch(endpoint, 'POST', body);
+        if (result) {
+            addLog('fb-api', 'Post created', `ID: ${result.id}`, 'success');
+        }
+        return result;
     }
-    const result = await graphFetch(endpoint, 'POST', body);
-    if (result) {
-        addLog('fb-api', 'Post created', `ID: ${result.id}`, 'success');
+    catch (error) {
+        addLog('fb-api', 'createPagePost Error', error.message, 'error');
+        return null;
     }
-    return result;
 }
 export async function deletePost(postId) {
-    const result = await graphFetch(`/${postId}`, 'DELETE');
-    return result?.success || false;
+    try {
+        const result = await graphFetch(`/${postId}`, 'DELETE');
+        return result?.success || false;
+    }
+    catch (error) {
+        addLog('fb-api', 'deletePost Error', error.message, 'error');
+        return false;
+    }
 }
 // ============================================================
 // COMMENTS — Read & reply
 // ============================================================
 export async function getPostComments(postId, limit = 25) {
-    const result = await graphFetch(`/${postId}/comments?fields=id,message,from,created_time,like_count,comment_count,parent&limit=${limit}`);
-    return result?.data || [];
+    try {
+        const result = await graphFetch(`/${postId}/comments?fields=id,message,from,created_time,like_count,comment_count,parent&limit=${limit}`);
+        return result?.data || [];
+    }
+    catch (error) {
+        addLog('fb-api', 'getPostComments Error', error.message, 'error');
+        return [];
+    }
 }
 export async function replyToComment(commentId, message) {
-    const result = await graphFetch(`/${commentId}/comments`, 'POST', { message });
-    if (result) {
-        addLog('fb-api', 'Comment replied', `To: ${commentId}, Text: "${message.substring(0, 50)}"`, 'success');
+    try {
+        const result = await graphFetch(`/${commentId}/comments`, 'POST', { message });
+        if (result) {
+            addLog('fb-api', 'Comment replied', `To: ${commentId}, Text: "${message.substring(0, 50)}"`, 'success');
+        }
+        return result;
     }
-    return result;
+    catch (error) {
+        addLog('fb-api', 'replyToComment Error', error.message, 'error');
+        return null;
+    }
 }
 export async function likeComment(commentId) {
-    const result = await graphFetch(`/${commentId}/likes`, 'POST');
-    return result?.success || false;
+    try {
+        const result = await graphFetch(`/${commentId}/likes`, 'POST');
+        return result?.success || false;
+    }
+    catch (error) {
+        addLog('fb-api', 'likeComment Error', error.message, 'error');
+        return false;
+    }
 }
 // ============================================================
 // CONVERSATIONS — List conversations
 // ============================================================
 export async function getPageConversations(limit = 20) {
-    const cfg = getFBConfig();
-    const result = await graphFetch(`/${cfg.pageId}/conversations?fields=id,participants,updated_time,snippet,unread_count,message_count&limit=${limit}`);
-    return result?.data || [];
+    try {
+        const cfg = getFBConfig();
+        const result = await graphFetch(`/${cfg.pageId}/conversations?fields=id,participants,updated_time,snippet,unread_count,message_count&limit=${limit}`);
+        return result?.data || [];
+    }
+    catch (error) {
+        addLog('fb-api', 'getPageConversations Error', error.message, 'error');
+        return [];
+    }
 }
 export async function getConversationMessages(conversationId, limit = 20) {
-    const result = await graphFetch(`/${conversationId}/messages?fields=id,message,from,created_time,attachments&limit=${limit}`);
-    return result?.data || [];
+    try {
+        const result = await graphFetch(`/${conversationId}/messages?fields=id,message,from,created_time,attachments&limit=${limit}`);
+        return result?.data || [];
+    }
+    catch (error) {
+        addLog('fb-api', 'getConversationMessages Error', error.message, 'error');
+        return [];
+    }
 }
 // ============================================================
 // TOKEN MANAGEMENT
@@ -188,13 +261,19 @@ export async function exchangeForLongLivedToken(shortLivedToken) {
 // WEBHOOK SUBSCRIPTION
 // ============================================================
 export async function subscribeAppToPage() {
-    const cfg = getFBConfig();
-    const result = await graphFetch(`/${cfg.pageId}/subscribed_apps`, 'POST', {
-        subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,feed',
-    });
-    if (result?.success) {
-        addLog('fb-api', 'Webhook subscribed', `Page ${cfg.pageId} subscribed to app`, 'success');
+    try {
+        const cfg = getFBConfig();
+        const result = await graphFetch(`/${cfg.pageId}/subscribed_apps`, 'POST', {
+            subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads,feed',
+        });
+        if (result?.success) {
+            addLog('fb-api', 'Webhook subscribed', `Page ${cfg.pageId} subscribed to app`, 'success');
+        }
+        return result?.success || false;
     }
-    return result?.success || false;
+    catch (error) {
+        addLog('fb-api', 'subscribeAppToPage Error', error.message, 'error');
+        return false;
+    }
 }
 //# sourceMappingURL=graphAPI.js.map

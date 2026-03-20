@@ -26,11 +26,18 @@ export function PersonaEditor() {
   }
 
   function startEdit(persona: any) {
+    let traits = persona.personality_traits;
+    if (typeof traits === 'string') {
+      try {
+        traits = JSON.parse(traits);
+      } catch (err) {
+        console.error('Failed to parse personality_traits:', err);
+        traits = [];
+      }
+    }
     setEditing({
       ...persona,
-      personality_traits: typeof persona.personality_traits === 'string'
-        ? JSON.parse(persona.personality_traits)
-        : persona.personality_traits,
+      personality_traits: Array.isArray(traits) ? traits : [],
     });
     setShowForm(true);
   }
@@ -221,9 +228,17 @@ export function PersonaEditor() {
       {/* Persona Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {personas.map(persona => {
-          const traits = typeof persona.personality_traits === 'string'
-            ? JSON.parse(persona.personality_traits)
-            : persona.personality_traits || [];
+          let traits: string[] = [];
+          if (typeof persona.personality_traits === 'string') {
+            try {
+              traits = JSON.parse(persona.personality_traits);
+            } catch (err) {
+              console.error('Failed to parse personality_traits:', err);
+              traits = [];
+            }
+          } else if (Array.isArray(persona.personality_traits)) {
+            traits = persona.personality_traits;
+          }
           return (
             <div
               key={persona.id}

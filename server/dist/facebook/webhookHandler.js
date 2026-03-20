@@ -22,23 +22,6 @@ function initDedup() {
     catch { /* table may already exist */ }
 }
 initDedup();
-function markProcessed(mid) {
-    processedMessageIds.add(mid);
-    try {
-        getDb().prepare('INSERT OR IGNORE INTO processed_messages (mid) VALUES (?)').run(mid);
-    }
-    catch { /* ignore */ }
-    if (processedMessageIds.size > MAX_PROCESSED) {
-        const entries = [...processedMessageIds];
-        for (let i = 0; i < 1000; i++) {
-            processedMessageIds.delete(entries[i]);
-            try {
-                getDb().prepare('DELETE FROM processed_messages WHERE mid = ?').run(entries[i]);
-            }
-            catch { }
-        }
-    }
-}
 let broadcastFn = null;
 export function setWebhookBroadcast(fn) {
     broadcastFn = fn;
@@ -96,10 +79,30 @@ async function handleMessagingEvent(event) {
     // Handle text messages
     if (event.message?.text) {
         const mid = event.message.mid;
-        // Deduplicate (DB-backed)
+        // Deduplicate — atomic check+set to prevent race condition
         if (processedMessageIds.has(mid))
             return;
-        markProcessed(mid);
+        processedMessageIds.add(mid); // memory gate first
+        try {
+            getDb().prepare('INSERT OR IGNORE INTO processed_messages (mid) VALUES (?)').run(mid);
+        }
+        catch (e) {
+            console.debug('[WebhookHandler]', String(e));
+        }
+        // Evict old entries
+        if (processedMessageIds.size > MAX_PROCESSED) {
+            const toDelete = [...processedMessageIds].slice(0, 1000);
+            for (const id of toDelete)
+                processedMessageIds.delete(id);
+            try {
+                const stmt = getDb().prepare('DELETE FROM processed_messages WHERE mid = ?');
+                getDb().transaction(() => { for (const id of toDelete)
+                    stmt.run(id); })();
+            }
+            catch (e) {
+                console.debug('[WebhookHandler]', String(e));
+            }
+        }
         const senderId = event.sender.id;
         const text = event.message.text;
         addLog('webhook', 'Message received', `From: ${senderId}, Text: "${text.substring(0, 60)}"`, 'info');
@@ -147,16 +150,20 @@ async function processAndReplyMessage(senderId, text, messageId) {
             broadcast('webhook:reply', { senderId, reply, source: 'qa' });
             return;
         }
-        // 4. Get persona
-        const persona = getDefaultPersona() || {
-            system_prompt: 'คุณคือแอดมินเพจ ตอบสุภาพ เป็นกันเอง',
-            speaking_style: 'casual-thai',
-            personality_traits: '["friendly","helpful"]',
+        // 4. Get persona (fallback to sensible defaults if none configured)
+        const personaRow = getDefaultPersona();
+        const persona = {
+            system_prompt: personaRow?.system_prompt ?? 'คุณคือแอดมินเพจ ตอบสุภาพ เป็นกันเอง',
+            speaking_style: personaRow?.speaking_style ?? 'casual-thai',
+            personality_traits: personaRow?.personality_traits ?? '["friendly","helpful"]',
+            temperature: personaRow?.temperature ?? 0.7,
+            max_tokens: personaRow?.max_tokens ?? 500,
         };
         // 5. Get conversation history
         const history = getDbMessages(convId, 20);
+        const filteredHistory = history.filter(m => m.role === 'user' || m.role === 'assistant');
         // 6. Build AI prompt & get reply
-        const aiMessages = buildChatMessages(persona, history, text);
+        const aiMessages = buildChatMessages(persona, filteredHistory, text);
         const aiResult = await aiChat('chat', aiMessages, {
             temperature: persona.temperature || 0.7,
             maxTokens: persona.max_tokens || 500,

@@ -1,10 +1,11 @@
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 const BASE_URL = 'https://api.minimaxi.chat/v1';
 export class MiniMaxProvider {
     id = 'minimax';
     name = 'MiniMax';
     getKey() {
-        return getSetting('ai_minimax_key') || '';
+        return getProviderApiKey('minimax') || '';
     }
     getModel() {
         return getSetting('ai_minimax_model') || 'MiniMax-M2.5';
@@ -52,7 +53,8 @@ export class MiniMaxProvider {
             });
             return res.ok;
         }
-        catch {
+        catch (e) {
+            console.debug('[Minimax] API validation failed:', String(e));
             return false;
         }
     }

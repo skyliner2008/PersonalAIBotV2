@@ -9,6 +9,27 @@ import { OpenAICompatibleProvider } from './providers/openaiCompatibleProvider';
 import { AIProvider } from './providers/baseProvider';
 
 // ============================================================
+// Types
+// ============================================================
+interface CircuitState {
+  failures: number;
+  openUntil: number;
+}
+
+interface ToolTelemetry {
+  name: string;
+  durationMs: number;
+  success: boolean;
+}
+
+interface AgentStats {
+  turns: number;
+  toolCalls: ToolTelemetry[];
+  totalTokens: number;
+  startTime: number;
+}
+
+// ============================================================
 // Timing constants
 // ============================================================
 const AGENT_TIMEOUT_MS = 120_000;  // 120 วินาที (เพิ่มจาก 90)
@@ -16,6 +37,90 @@ const TOOL_TIMEOUT_MS  = 45_000;   // 45 วินาทีต่อ tool (เ�
 const MAX_TURNS        = 20;       // เพิ่มจาก 12 → รองรับ multi-step
 const MAX_TOOL_OUTPUT  = 12_000;   // เพิ่ม output size
 const LTM_EXTRACT_EVERY = 4;       // ดึง knowledge ถี่ขึ้น (ทุก 4 ข้อความ)
+
+// ============================================================
+// Circuit Breaker — ป้องกัน tool ที่ fail ซ้ำๆ (Exponential Backoff)
+// ============================================================
+const toolCircuits: Map<string, CircuitState> = new Map();
+const CIRCUIT_THRESHOLD = 3;          // เปิด circuit หลัง fail 3 ครั้ง
+const CIRCUIT_BASE_MS = 10_000;     // base reset = 10 วินาที
+const CIRCUIT_MAX_MS = 120_000;    // max reset = 120 วินาที
+
+function isCircuitOpen(toolName: string): boolean {
+  const c = toolCircuits.get(toolName);
+  if (!c) return false;
+  if (c.openUntil > Date.now()) return true;
+  // Auto-reset: ลด failures ลงครึ่งหนึ่ง (half-open state)
+  c.failures = Math.floor(c.failures / 2);
+  c.openUntil = 0;
+  if (c.failures === 0) toolCircuits.delete(toolName);
+  else toolCircuits.set(toolName, c);
+  return false;
+}
+
+function recordToolResult(toolName: string, success: boolean): void {
+  if (success) {
+    const c = toolCircuits.get(toolName);
+    if (c) {
+      // Gradual recovery: ลด failures ทีละ 1 เมื่อสำเร็จ
+      c.failures = Math.max(0, c.failures - 1);
+      if (c.failures === 0) toolCircuits.delete(toolName);
+      else toolCircuits.set(toolName, c);
+    }
+    return;
+  }
+  const c = toolCircuits.get(toolName) ?? { failures: 0, openUntil: 0 };
+  c.failures++;
+  if (c.failures >= CIRCUIT_THRESHOLD) {
+    // Exponential backoff: 10s → 20s → 40s → 80s → 120s (cap)
+    const backoffMs = Math.min(CIRCUIT_BASE_MS * Math.pow(2, c.failures - CIRCUIT_THRESHOLD), CIRCUIT_MAX_MS);
+    c.openUntil = Date.now() + backoffMs;
+    console.warn(`[CircuitBreaker] ${toolName} OPEN for ${backoffMs / 1000}s after ${c.failures} failures`);
+  }
+  toolCircuits.set(toolName, c);
+}
+
+// ============================================================
+// Agent Stats Tracking — เก็บ telemetry ทุก request
+// ============================================================
+const globalStats = {
+  totalRuns: 0,
+  totalToolCalls: 0,
+  totalTokens: 0,
+  totalLatencyMs: 0,
+  avgLatencyMs: 0,
+};
+
+function recordStats(stats: AgentStats): void {
+  globalStats.totalRuns++;
+  globalStats.totalToolCalls += stats.toolCalls.length;
+  globalStats.totalTokens += stats.totalTokens;
+  const latency = Date.now() - stats.startTime;
+  globalStats.totalLatencyMs += latency;
+  globalStats.avgLatencyMs = Math.round(globalStats.totalLatencyMs / globalStats.totalRuns);
+}
+
+export function getAgentStats() {
+  return { ...globalStats };
+}
+
+// ============================================================
+// Rate Limiting — per-user cooldown
+// ============================================================
+const userLastMessageTime: Map<string, number> = new Map();
+const MIN_USER_COOLDOWN_MS = 1000;  // 1 second
+
+async function enforceUserRateLimit(chatId: string): Promise<void> {
+  const now = Date.now();
+  const lastTime = userLastMessageTime.get(chatId) ?? 0;
+  const elapsed = now - lastTime;
+  if (elapsed < MIN_USER_COOLDOWN_MS) {
+    const delay = MIN_USER_COOLDOWN_MS - elapsed;
+    console.log(`[RateLimit] ${chatId} cooldown: ${delay}ms`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  userLastMessageTime.set(chatId, Date.now());
+}
 
 // ============================================================
 // Per-user queue (ป้องกัน race condition)
@@ -42,24 +147,40 @@ export class Agent {
   private messageCountPerUser: Map<string, number> = new Map();
 
   constructor(apiKey: string) {
+    // ============================================================
+    // Provider Validation — Set null for unconfigured providers
+    // ============================================================
+    if (!apiKey || apiKey.trim() === '') {
+      console.warn('[Agent] Warning: Gemini API key is not configured (empty or undefined)');
+    }
+
+    const openaiKey = process.env.OPENAI_API_KEY?.trim() || '';
+    const minimaxKey = process.env.MINIMAX_API_KEY?.trim() || '';
+
     this.providers = {
       gemini:  new GeminiProvider(apiKey),
-      openai:  new OpenAICompatibleProvider(process.env.OPENAI_API_KEY || ''),
-      minimax: new OpenAICompatibleProvider(
-        process.env.MINIMAX_API_KEY || '',
-        'https://api.minimax.io/v1'
-      )
+      openai:  openaiKey ? new OpenAICompatibleProvider(openaiKey) : (null as any),
+      minimax: minimaxKey ? new OpenAICompatibleProvider(minimaxKey, 'https://api.minimax.io/v1') : (null as any)
     };
+
+    // Log configured providers
+    const configured = Object.entries(this.providers)
+      .filter(([_, p]) => p !== null)
+      .map(([name]) => name);
+    console.log(`[Agent] Configured providers: ${configured.join(', ')}`);
+
     this.ltm = new LongTermMemory(apiKey);
   }
 
   // ── Public: queue per-user ──────────────────────────────────
-  public processMessage(
+  public async processMessage(
     chatId: string,
     message: string,
     ctx: BotContext,
     attachments?: Part[]
   ): Promise<string> {
+    // Apply rate limiting
+    await enforceUserRateLimit(chatId);
     return enqueueForUser(chatId, () => this._processMessageCore(chatId, message, ctx, attachments));
   }
 
@@ -72,6 +193,12 @@ export class Agent {
   ): Promise<string> {
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), AGENT_TIMEOUT_MS);
+    const stats: AgentStats = {
+      turns: 0,
+      toolCalls: [],
+      totalTokens: 0,
+      startTime: Date.now()
+    };
 
     try {
       // 1. Task routing
@@ -141,10 +268,12 @@ ${knowledgeCtx}
       while (currentTurn < MAX_TURNS) {
         if (abortController.signal.aborted) {
           console.warn(`[Agent] Timeout after ${currentTurn} turns for ${chatId}`);
+          recordStats(stats);
           return '⏰ ขออภัย ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้งครับ';
         }
 
         currentTurn++;
+        stats.turns = currentTurn;
 
         const response = await provider.generateResponse(
           config.modelName,
@@ -154,6 +283,7 @@ ${knowledgeCtx}
         );
 
         if (response.usage) {
+          stats.totalTokens += response.usage.totalTokens;
           console.log(`[Tokens T${currentTurn}] P=${response.usage.promptTokens} C=${response.usage.completionTokens} Total=${response.usage.totalTokens}`);
         }
 
@@ -184,26 +314,47 @@ ${knowledgeCtx}
             console.log(`[Tool] Calling ${funcName}(${JSON.stringify(args).substring(0, 100)})`);
 
             let resultStr: string;
+            const toolStart = Date.now();
+            let success = false;
+
             try {
-              const toolFn = handlers[funcName];
-              if (!toolFn) {
-                resultStr = `❌ Tool '${funcName}' ไม่พบ`;
+              // 🔌 Circuit Breaker — ข้าม tool ที่ fail ซ้ำๆ
+              if (isCircuitOpen(funcName)) {
+                console.warn(`[CircuitBreaker] ${funcName} is OPEN — skipping`);
+                resultStr = `⚡ Tool '${funcName}' ชั่วคราวถูก disable (fail บ่อยเกินไป) ลองใช้ tool อื่นแทน`;
               } else {
-                resultStr = await Promise.race([
-                  toolFn(args),
-                  new Promise<string>((_, reject) =>
-                    setTimeout(() => reject(new Error(`Tool timeout: ${funcName}`)), TOOL_TIMEOUT_MS)
-                  )
-                ]);
+                const toolFn = handlers[funcName];
+                if (!toolFn) {
+                  resultStr = `❌ Tool '${funcName}' ไม่พบ`;
+                } else {
+                  resultStr = await Promise.race([
+                    toolFn(args),
+                    new Promise<string>((_, reject) =>
+                      setTimeout(() => reject(new Error(`Tool timeout: ${funcName}`)), TOOL_TIMEOUT_MS)
+                    )
+                  ]);
+                  success = true;
+                }
               }
             } catch (err: any) {
               resultStr = `❌ Tool error (${funcName}): ${err.message}`;
+              success = false;
             }
+
+            // Record tool result for circuit breaker
+            recordToolResult(funcName, success);
 
             // ตัดผลลัพธ์ที่ยาวเกินไป — เพิ่ม limit
             if (typeof resultStr === 'string' && resultStr.length > MAX_TOOL_OUTPUT) {
               resultStr = resultStr.substring(0, MAX_TOOL_OUTPUT) + '\n...(ข้อมูลถูกตัดให้สั้นลง)';
             }
+
+            // Track telemetry
+            stats.toolCalls.push({
+              name: funcName,
+              durationMs: Date.now() - toolStart,
+              success
+            });
 
             // 3. Build proper functionResponse part (Gemini SDK format)
             responseParts.push({
@@ -235,7 +386,11 @@ ${knowledgeCtx}
         setImmediate(() => this.extractNewKnowledge(chatId, message, finalResponseText));
       }
 
-      return finalResponseText || '✅ เสร็จแล้วครับ';
+      // Record stats
+      recordStats(stats);
+      const reply = finalResponseText || '✅ เสร็จแล้วครับ';
+      console.log(`[Agent] Done in ${Date.now() - stats.startTime}ms | Turns: ${stats.turns} | Tools: ${stats.toolCalls.length} | Tokens: ${stats.totalTokens}`);
+      return reply;
     } catch (error: any) {
       console.error('[Agent Error]:', error);
 
@@ -267,18 +422,31 @@ ${knowledgeCtx}
   // ── Knowledge extraction (async, silent) ────────────────────
   private async extractNewKnowledge(chatId: string, userMsg: string, aiMsg: string) {
     try {
-      const provider = this.providers.gemini;
-      const res = await provider.generateResponse(
+      if (!this.providers.gemini) {
+        console.warn('[Agent] Gemini provider not available for knowledge extraction');
+        return;
+      }
+
+      // Timeout protection
+      const extractionPromise = this.providers.gemini.generateResponse(
         'gemini-2.0-flash-lite',
         "จาก conversation นี้ ดึงข้อเท็จจริงสั้นๆ เกี่ยวกับผู้ใช้ 1 ข้อ (ชื่อ, อาชีพ, ความชอบ, นิสัย) หรือตอบว่า 'NONE' ถ้าไม่มีข้อมูลใหม่",
         [{ role: 'user', parts: [{ text: `User: ${userMsg}\nAI: ${aiMsg}` }] }]
       );
+
+      const timeoutPromise = new Promise<any>((_, reject) =>
+        setTimeout(() => reject(new Error('Knowledge extraction timeout')), 10000)
+      );
+
+      const res = await Promise.race([extractionPromise, timeoutPromise]);
       const fact = res.text?.trim();
       if (fact && fact !== 'NONE' && fact.length > 5 && fact.length < 200) {
         await this.ltm.saveKnowledge(chatId, fact);
         console.log(`[LTM] Extracted: ${fact}`);
       }
-    } catch (_) {}
+    } catch (err: any) {
+      console.error('[Agent] Knowledge extraction error:', err.message);
+    }
   }
 
   // ── List models ──────────────────────────────────────────────
@@ -286,5 +454,57 @@ ${knowledgeCtx}
     const provider = this.providers[providerName];
     if (!provider) return [];
     return await provider.listModels();
+  }
+
+  // ── Health Check ───────────────────────────────────────────
+  public async selfHealthCheck(): Promise<{ healthy: boolean; issues: string[] }> {
+    const issues: string[] = [];
+
+    // Check memory system
+    try {
+      if (!memoryManager) {
+        issues.push('Memory system not accessible');
+      }
+    } catch (err) {
+      issues.push('Failed to access memory system');
+    }
+
+    // Check at least one provider is configured
+    const configuredProviders = Object.entries(this.providers)
+      .filter(([_, p]) => p !== null && p !== undefined)
+      .map(([name]) => name);
+
+    if (configuredProviders.length === 0) {
+      issues.push('No AI providers are configured');
+    }
+
+    // Check LTM
+    try {
+      if (!this.ltm) {
+        issues.push('Long-term memory not initialized');
+      }
+    } catch (err) {
+      issues.push('Failed to access long-term memory');
+    }
+
+    return {
+      healthy: issues.length === 0,
+      issues
+    };
+  }
+}
+
+// ============================================================
+// Export health check as standalone function
+// ============================================================
+export async function agentHealthCheck(): Promise<{ healthy: boolean; issues: string[] }> {
+  try {
+    const agent = new Agent(process.env.GEMINI_API_KEY || '');
+    return await agent.selfHealthCheck();
+  } catch (err: any) {
+    return {
+      healthy: false,
+      issues: [`Failed to create agent: ${err.message}`]
+    };
   }
 }

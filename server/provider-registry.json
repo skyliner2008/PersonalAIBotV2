@@ -1,0 +1,1002 @@
+{
+  "version": "2.0",
+  "lastUpdated": "2026-03-18",
+  "description": "Unified Provider Registry — เพิ่ม provider ใหม่ได้ที่ไฟล์นี้ ไม่ต้องแก้โค้ด",
+  "providers": {
+    "gemini": {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "category": "llm",
+      "type": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "defaultModel": "gemini-flash-latest",
+      "models": [
+        "deep-research-pro-preview-12-2025",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash-lite-001",
+        "gemini-2.5-computer-use-preview-10-2025",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-image",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite-preview-09-2025",
+        "gemini-2.5-flash-native-audio-latest",
+        "gemini-2.5-flash-native-audio-preview-09-2025",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-2.5-pro",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-3-pro-preview",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+        "gemini-robotics-er-1.5-preview",
+        "gemma-3-12b-it",
+        "gemma-3-1b-it",
+        "gemma-3-27b-it",
+        "gemma-3-4b-it",
+        "gemma-3n-e2b-it",
+        "gemma-3n-e4b-it",
+        "imagen-4.0-fast-generate-001",
+        "imagen-4.0-generate-001",
+        "imagen-4.0-ultra-generate-001",
+        "nano-banana-pro-preview",
+        "veo-2.0-generate-001",
+        "veo-3.0-fast-generate-001",
+        "veo-3.0-generate-001",
+        "veo-3.1-fast-generate-preview",
+        "veo-3.1-generate-preview",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true,
+        "vision": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "GEMINI_API_KEY",
+      "enabled": true
+    },
+    "openai": {
+      "id": "openai",
+      "name": "OpenAI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-5.2-codex",
+      "models": [
+        "babbage-002",
+        "chatgpt-image-latest",
+        "dall-e-2",
+        "dall-e-3",
+        "davinci-002",
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-0125",
+        "gpt-3.5-turbo-1106",
+        "gpt-3.5-turbo-16k",
+        "gpt-3.5-turbo-instruct",
+        "gpt-3.5-turbo-instruct-0914",
+        "gpt-4.1",
+        "gpt-4.1-2025-04-14",
+        "gpt-4.1-mini",
+        "gpt-4.1-mini-2025-04-14",
+        "gpt-4.1-nano",
+        "gpt-4.1-nano-2025-04-14",
+        "gpt-4o",
+        "gpt-4o-2024-05-13",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-2024-11-20",
+        "gpt-4o-audio-preview",
+        "gpt-4o-audio-preview-2024-12-17",
+        "gpt-4o-audio-preview-2025-06-03",
+        "gpt-4o-mini",
+        "gpt-4o-mini-2024-07-18",
+        "gpt-4o-mini-audio-preview",
+        "gpt-4o-mini-audio-preview-2024-12-17",
+        "gpt-4o-mini-search-preview",
+        "gpt-4o-mini-search-preview-2025-03-11",
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-mini-transcribe-2025-03-20",
+        "gpt-4o-mini-transcribe-2025-12-15",
+        "gpt-4o-mini-tts",
+        "gpt-4o-mini-tts-2025-03-20",
+        "gpt-4o-mini-tts-2025-12-15",
+        "gpt-4o-search-preview",
+        "gpt-4o-search-preview-2025-03-11",
+        "gpt-4o-transcribe",
+        "gpt-4o-transcribe-diarize",
+        "gpt-5",
+        "gpt-5-2025-08-07",
+        "gpt-5-chat-latest",
+        "gpt-5-codex",
+        "gpt-5-mini",
+        "gpt-5-mini-2025-08-07",
+        "gpt-5-nano",
+        "gpt-5-nano-2025-08-07",
+        "gpt-5-pro",
+        "gpt-5-pro-2025-10-06",
+        "gpt-5-search-api",
+        "gpt-5-search-api-2025-10-14",
+        "gpt-5.1",
+        "gpt-5.1-2025-11-13",
+        "gpt-5.1-chat-latest",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-2025-12-11",
+        "gpt-5.2-chat-latest",
+        "gpt-5.2-codex",
+        "gpt-5.2-pro",
+        "gpt-5.2-pro-2025-12-11",
+        "gpt-5.3-chat-latest",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-2026-03-05",
+        "gpt-5.4-mini",
+        "gpt-5.4-mini-2026-03-17",
+        "gpt-5.4-nano",
+        "gpt-5.4-nano-2026-03-17",
+        "gpt-5.4-pro",
+        "gpt-5.4-pro-2026-03-05",
+        "gpt-audio",
+        "gpt-audio-1.5",
+        "gpt-audio-2025-08-28",
+        "gpt-audio-mini",
+        "gpt-audio-mini-2025-10-06",
+        "gpt-audio-mini-2025-12-15",
+        "gpt-image-1",
+        "gpt-image-1-mini",
+        "gpt-image-1.5",
+        "gpt-realtime",
+        "gpt-realtime-1.5",
+        "gpt-realtime-2025-08-28",
+        "gpt-realtime-mini",
+        "gpt-realtime-mini-2025-10-06",
+        "gpt-realtime-mini-2025-12-15",
+        "o1",
+        "o1-2024-12-17",
+        "o3",
+        "o3-2025-04-16",
+        "o3-mini",
+        "o3-mini-2025-01-31",
+        "o4-mini",
+        "o4-mini-2025-04-16",
+        "omni-moderation-2024-09-26",
+        "omni-moderation-latest",
+        "sora-2",
+        "sora-2-pro",
+        "text-embedding-3-large",
+        "text-embedding-3-small",
+        "text-embedding-ada-002",
+        "tts-1",
+        "tts-1-1106",
+        "tts-1-hd",
+        "tts-1-hd-1106",
+        "whisper-1",
+        "gpt-4-turbo",
+        "gpt-4"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true,
+        "vision": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "enabled": true
+    },
+    "anthropic": {
+      "id": "anthropic",
+      "name": "Anthropic Claude",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "defaultModel": "claude-sonnet-4-6",
+      "models": [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true,
+        "vision": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+      "enabled": false
+    },
+    "minimax": {
+      "id": "minimax",
+      "name": "MiniMax",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.minimax.io/v1",
+      "defaultModel": "MiniMax-M2.7",
+      "models": [
+        "MiniMax-M2.7",
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed",
+        "MiniMax-M2.1",
+        "MiniMax-M2.1-highspeed",
+        "MiniMax-M2",
+        "MiniMax-M2-her",
+        "MiniMax-M1",
+        "MiniMax-Text-01",
+        "abab6.5s-chat",
+        "abab6.5g-chat",
+        "abab6.5-chat"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "MINIMAX_API_KEY",
+      "enabled": true,
+      "notes": "ไม่รองรับ GET /models — ใช้ models จาก registry"
+    },
+    "openrouter": {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "defaultModel": "auto",
+      "models": [
+        "auto"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENROUTER_API_KEY",
+      "enabled": false
+    },
+    "groq": {
+      "id": "groq",
+      "name": "Groq",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "defaultModel": "llama-3.3-70b-versatile",
+      "models": [
+        "llama-3.3-70b-versatile",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "GROQ_API_KEY",
+      "enabled": false
+    },
+    "deepseek": {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "defaultModel": "deepseek-chat",
+      "models": [
+        "deepseek-chat",
+        "deepseek-coder",
+        "deepseek-reasoner"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "DEEPSEEK_API_KEY",
+      "enabled": false
+    },
+    "mistral": {
+      "id": "mistral",
+      "name": "Mistral AI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "defaultModel": "mistral-large-latest",
+      "models": [
+        "mistral-large-latest",
+        "mistral-medium-latest",
+        "mistral-small-latest",
+        "codestral-latest"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "MISTRAL_API_KEY",
+      "enabled": false
+    },
+    "cohere": {
+      "id": "cohere",
+      "name": "Cohere",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.cohere.com/v2",
+      "defaultModel": "command-r-plus",
+      "models": [
+        "command-r-plus",
+        "command-r",
+        "command-light"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "COHERE_API_KEY",
+      "enabled": false
+    },
+    "together": {
+      "id": "together",
+      "name": "Together AI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.together.xyz/v1",
+      "defaultModel": "meta-llama/Llama-3-70b-chat-hf",
+      "models": [],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "TOGETHER_API_KEY",
+      "enabled": false
+    },
+    "perplexity": {
+      "id": "perplexity",
+      "name": "Perplexity AI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.perplexity.ai",
+      "defaultModel": "sonar-pro",
+      "models": [
+        "sonar-pro",
+        "sonar",
+        "sonar-reasoning-pro"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "PERPLEXITY_API_KEY",
+      "enabled": false
+    },
+    "fireworks": {
+      "id": "fireworks",
+      "name": "Fireworks AI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "defaultModel": "accounts/fireworks/models/llama-v3p1-70b-instruct",
+      "models": [],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "FIREWORKS_API_KEY",
+      "enabled": false
+    },
+    "xai": {
+      "id": "xai",
+      "name": "xAI (Grok)",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.x.ai/v1",
+      "defaultModel": "grok-2",
+      "models": [
+        "grok-2",
+        "grok-2-mini"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "vision": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "XAI_API_KEY",
+      "enabled": false
+    },
+    "sambanova": {
+      "id": "sambanova",
+      "name": "SambaNova",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.sambanova.ai/v1",
+      "defaultModel": "Meta-Llama-3.1-70B-Instruct",
+      "models": [],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "SAMBANOVA_API_KEY",
+      "enabled": false
+    },
+    "cerebras": {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "defaultModel": "llama3.1-70b",
+      "models": [
+        "llama3.1-70b",
+        "llama3.1-8b"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "CEREBRAS_API_KEY",
+      "enabled": false
+    },
+    "hyperbolic": {
+      "id": "hyperbolic",
+      "name": "Hyperbolic",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.hyperbolic.xyz/v1",
+      "defaultModel": "meta-llama/Llama-3.3-70B-Instruct",
+      "models": [],
+      "capabilities": {
+        "chat": true,
+        "streaming": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "HYPERBOLIC_API_KEY",
+      "enabled": false
+    },
+    "gemini-embedding": {
+      "id": "gemini-embedding",
+      "name": "Google Embeddings",
+      "category": "embedding",
+      "type": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "defaultModel": "gemini-embedding-001",
+      "models": [
+        "gemini-embedding-001",
+        "gemini-embedding-2-preview",
+        "gemini-embedding-002",
+        "text-embedding-004"
+      ],
+      "capabilities": {
+        "embedding": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "GEMINI_API_KEY",
+      "enabled": true
+    },
+    "openai-embedding": {
+      "id": "openai-embedding",
+      "name": "OpenAI Embeddings",
+      "category": "embedding",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "text-embedding-3-small",
+      "models": [
+        "text-embedding-3-large",
+        "text-embedding-3-small"
+      ],
+      "capabilities": {
+        "embedding": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "enabled": false
+    },
+    "cohere-embedding": {
+      "id": "cohere-embedding",
+      "name": "Cohere Embed",
+      "category": "embedding",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.cohere.com/v2",
+      "defaultModel": "embed-v4.0",
+      "models": [
+        "embed-v4.0",
+        "embed-english-v3.0",
+        "embed-multilingual-v3.0"
+      ],
+      "capabilities": {
+        "embedding": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "COHERE_API_KEY",
+      "enabled": false
+    },
+    "tavily": {
+      "id": "tavily",
+      "name": "Tavily Search",
+      "category": "search",
+      "type": "rest-api",
+      "baseUrl": "https://api.tavily.com",
+      "capabilities": {
+        "search": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "TAVILY_API_KEY",
+      "enabled": false
+    },
+    "serper": {
+      "id": "serper",
+      "name": "Serper (Google Search)",
+      "category": "search",
+      "type": "rest-api",
+      "baseUrl": "https://google.serper.dev",
+      "capabilities": {
+        "search": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "SERPER_API_KEY",
+      "enabled": false
+    },
+    "brave-search": {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "category": "search",
+      "type": "rest-api",
+      "baseUrl": "https://api.search.brave.com/res/v1",
+      "capabilities": {
+        "search": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "BRAVE_SEARCH_API_KEY",
+      "enabled": false
+    },
+    "serpapi": {
+      "id": "serpapi",
+      "name": "SerpAPI",
+      "category": "search",
+      "type": "rest-api",
+      "baseUrl": "https://serpapi.com",
+      "capabilities": {
+        "search": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "SERPAPI_API_KEY",
+      "enabled": false
+    },
+    "elevenlabs": {
+      "id": "elevenlabs",
+      "name": "ElevenLabs TTS",
+      "category": "tts",
+      "type": "rest-api",
+      "baseUrl": "https://api.elevenlabs.io/v1",
+      "capabilities": {
+        "textToSpeech": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "ELEVENLABS_API_KEY",
+      "enabled": false
+    },
+    "openai-tts": {
+      "id": "openai-tts",
+      "name": "OpenAI TTS",
+      "category": "tts",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "tts-1",
+      "models": [
+        "tts-1",
+        "tts-1-hd"
+      ],
+      "capabilities": {
+        "textToSpeech": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "enabled": false
+    },
+    "google-tts": {
+      "id": "google-tts",
+      "name": "Google Cloud TTS",
+      "category": "tts",
+      "type": "rest-api",
+      "baseUrl": "https://texttospeech.googleapis.com",
+      "capabilities": {
+        "textToSpeech": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "GOOGLE_CLOUD_API_KEY",
+      "enabled": false
+    },
+    "dall-e": {
+      "id": "dall-e",
+      "name": "DALL-E (OpenAI)",
+      "category": "image",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "dall-e-3",
+      "models": [
+        "dall-e-3",
+        "dall-e-2"
+      ],
+      "capabilities": {
+        "imageGeneration": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENAI_API_KEY",
+      "enabled": false
+    },
+    "stability": {
+      "id": "stability",
+      "name": "Stability AI",
+      "category": "image",
+      "type": "rest-api",
+      "baseUrl": "https://api.stability.ai",
+      "capabilities": {
+        "imageGeneration": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "STABILITY_API_KEY",
+      "enabled": false
+    },
+    "replicate": {
+      "id": "replicate",
+      "name": "Replicate",
+      "category": "image",
+      "type": "rest-api",
+      "baseUrl": "https://api.replicate.com/v1",
+      "capabilities": {
+        "imageGeneration": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "REPLICATE_API_TOKEN",
+      "enabled": false
+    },
+    "fal": {
+      "id": "fal",
+      "name": "fal.ai",
+      "category": "image",
+      "type": "rest-api",
+      "baseUrl": "https://fal.run",
+      "capabilities": {
+        "imageGeneration": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "FAL_KEY",
+      "enabled": false
+    },
+    "telegram": {
+      "id": "telegram",
+      "name": "Telegram Bot",
+      "category": "platform",
+      "type": "platform",
+      "capabilities": {
+        "messaging": true,
+        "fileUpload": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "TELEGRAM_BOT_TOKEN",
+      "enabled": true
+    },
+    "line": {
+      "id": "line",
+      "name": "LINE Messaging",
+      "category": "platform",
+      "type": "platform",
+      "capabilities": {
+        "messaging": true,
+        "fileUpload": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "LINE_CHANNEL_ACCESS_TOKEN",
+      "secretKeyEnvVar": "LINE_CHANNEL_SECRET",
+      "enabled": true
+    },
+    "facebook": {
+      "id": "facebook",
+      "name": "Facebook Messenger",
+      "category": "platform",
+      "type": "platform",
+      "baseUrl": "https://graph.facebook.com",
+      "capabilities": {
+        "messaging": true,
+        "fileUpload": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "FACEBOOK_PAGE_ACCESS_TOKEN",
+      "enabled": true
+    },
+    "discord": {
+      "id": "discord",
+      "name": "Discord Bot",
+      "category": "platform",
+      "type": "platform",
+      "baseUrl": "https://discord.com/api",
+      "capabilities": {
+        "messaging": true,
+        "fileUpload": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "DISCORD_BOT_TOKEN",
+      "enabled": false
+    },
+    "slack": {
+      "id": "slack",
+      "name": "Slack Bot",
+      "category": "platform",
+      "type": "platform",
+      "baseUrl": "https://slack.com/api",
+      "capabilities": {
+        "messaging": true,
+        "fileUpload": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "SLACK_BOT_TOKEN",
+      "enabled": false
+    },
+    "gemini-cli": {
+      "id": "gemini-cli",
+      "name": "Gemini CLI",
+      "category": "llm",
+      "type": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "defaultModel": "gemini-2.5-flash",
+      "models": [
+        "deep-research-pro-preview-12-2025",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash-lite-001",
+        "gemini-2.5-computer-use-preview-10-2025",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-image",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite-preview-09-2025",
+        "gemini-2.5-flash-native-audio-latest",
+        "gemini-2.5-flash-native-audio-preview-09-2025",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-2.5-pro",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-3-pro-preview",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+        "gemini-robotics-er-1.5-preview",
+        "gemma-3-12b-it",
+        "gemma-3-1b-it",
+        "gemma-3-27b-it",
+        "gemma-3-4b-it",
+        "gemma-3n-e2b-it",
+        "gemma-3n-e4b-it",
+        "imagen-4.0-fast-generate-001",
+        "imagen-4.0-generate-001",
+        "imagen-4.0-ultra-generate-001",
+        "nano-banana-pro-preview",
+        "veo-2.0-generate-001",
+        "veo-3.0-fast-generate-001",
+        "veo-3.0-generate-001",
+        "veo-3.1-fast-generate-preview",
+        "veo-3.1-generate-preview"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "GEMINI_CLI_API_KEY",
+      "enabled": true,
+      "notes": "OAuth via gemini CLI — Gemini CLI — C:\\Users\\MSI\\AppData\\Roaming\\npm\\gemini"
+    },
+    "kilo-cli": {
+      "id": "kilo-cli",
+      "name": "Kilo Code CLI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "",
+      "defaultModel": "kilo-auto/free",
+      "models": [
+        "kilo-auto/free",
+        "claude-sonnet-4-20250514",
+        "claude-haiku-4-20250414",
+        "gpt-4o",
+        "gemini-2.5-flash"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "KILO_CLI_API_KEY",
+      "enabled": true,
+      "notes": "OAuth via kilo CLI — Kilo CLI — C:\\Users\\MSI\\AppData\\Roaming\\npm\\kilo"
+    },
+    "openai-cli": {
+      "id": "openai-cli",
+      "name": "OpenAI CLI",
+      "category": "llm",
+      "type": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-5.3-codex",
+      "models": [
+        "babbage-002",
+        "chatgpt-image-latest",
+        "dall-e-2",
+        "dall-e-3",
+        "davinci-002",
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-0125",
+        "gpt-3.5-turbo-1106",
+        "gpt-3.5-turbo-16k",
+        "gpt-3.5-turbo-instruct",
+        "gpt-3.5-turbo-instruct-0914",
+        "gpt-4.1",
+        "gpt-4.1-2025-04-14",
+        "gpt-4.1-mini",
+        "gpt-4.1-mini-2025-04-14",
+        "gpt-4.1-nano",
+        "gpt-4.1-nano-2025-04-14",
+        "gpt-4o",
+        "gpt-4o-2024-05-13",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-2024-11-20",
+        "gpt-4o-audio-preview",
+        "gpt-4o-audio-preview-2024-12-17",
+        "gpt-4o-audio-preview-2025-06-03",
+        "gpt-4o-mini",
+        "gpt-4o-mini-2024-07-18",
+        "gpt-4o-mini-audio-preview",
+        "gpt-4o-mini-audio-preview-2024-12-17",
+        "gpt-4o-mini-search-preview",
+        "gpt-4o-mini-search-preview-2025-03-11",
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-mini-transcribe-2025-03-20",
+        "gpt-4o-mini-transcribe-2025-12-15",
+        "gpt-4o-mini-tts",
+        "gpt-4o-mini-tts-2025-03-20",
+        "gpt-4o-mini-tts-2025-12-15",
+        "gpt-4o-search-preview",
+        "gpt-4o-search-preview-2025-03-11",
+        "gpt-4o-transcribe",
+        "gpt-4o-transcribe-diarize",
+        "gpt-5",
+        "gpt-5-2025-08-07",
+        "gpt-5-chat-latest",
+        "gpt-5-codex",
+        "gpt-5-mini",
+        "gpt-5-mini-2025-08-07",
+        "gpt-5-nano",
+        "gpt-5-nano-2025-08-07",
+        "gpt-5-pro",
+        "gpt-5-pro-2025-10-06",
+        "gpt-5-search-api",
+        "gpt-5-search-api-2025-10-14",
+        "gpt-5.1",
+        "gpt-5.1-2025-11-13",
+        "gpt-5.1-chat-latest",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-2025-12-11",
+        "gpt-5.2-chat-latest",
+        "gpt-5.2-codex",
+        "gpt-5.2-pro",
+        "gpt-5.2-pro-2025-12-11",
+        "gpt-5.3-chat-latest",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-2026-03-05",
+        "gpt-5.4-mini",
+        "gpt-5.4-mini-2026-03-17",
+        "gpt-5.4-nano",
+        "gpt-5.4-nano-2026-03-17",
+        "gpt-5.4-pro",
+        "gpt-5.4-pro-2026-03-05",
+        "gpt-audio",
+        "gpt-audio-1.5",
+        "gpt-audio-2025-08-28",
+        "gpt-audio-mini",
+        "gpt-audio-mini-2025-10-06",
+        "gpt-audio-mini-2025-12-15",
+        "gpt-image-1",
+        "gpt-image-1-mini",
+        "gpt-image-1.5",
+        "gpt-realtime",
+        "gpt-realtime-1.5",
+        "gpt-realtime-2025-08-28",
+        "gpt-realtime-mini",
+        "gpt-realtime-mini-2025-10-06",
+        "gpt-realtime-mini-2025-12-15",
+        "o1",
+        "o1-2024-12-17",
+        "o3",
+        "o3-2025-04-16",
+        "o3-mini",
+        "o3-mini-2025-01-31",
+        "o4-mini",
+        "o4-mini-2025-04-16",
+        "omni-moderation-2024-09-26",
+        "omni-moderation-latest",
+        "sora-2",
+        "sora-2-pro",
+        "text-embedding-3-large",
+        "text-embedding-3-small",
+        "text-embedding-ada-002",
+        "tts-1",
+        "tts-1-1106",
+        "tts-1-hd",
+        "tts-1-hd-1106",
+        "whisper-1",
+        "gpt-4-turbo"
+      ],
+      "capabilities": {
+        "chat": true,
+        "streaming": true,
+        "functionCalling": true
+      },
+      "requiresAuth": true,
+      "apiKeyEnvVar": "OPENAI_CLI_API_KEY",
+      "enabled": true,
+      "notes": "OAuth via openai CLI — OpenAI CLI — C:\\Users\\MSI\\PersonalAIBotV2\\server\\node_modules\\.bin\\openai"
+    }
+  },
+  "fallbackOrder": {
+    "llm": [
+      "gemini",
+      "minimax",
+      "openai",
+      "groq",
+      "deepseek"
+    ],
+    "embedding": [
+      "gemini-embedding",
+      "openai-embedding"
+    ],
+    "search": [
+      "tavily",
+      "serper",
+      "brave-search"
+    ],
+    "tts": [
+      "elevenlabs",
+      "openai-tts"
+    ],
+    "image": [
+      "dall-e",
+      "stability",
+      "replicate"
+    ]
+  },
+  "categories": [
+    "llm",
+    "embedding",
+    "search",
+    "tts",
+    "image",
+    "platform"
+  ]
+}

@@ -2,7 +2,7 @@
 // Conversation Auto-Summarizer
 // ============================================================
 // Periodically summarizes long conversations to reduce token usage.
-// Called from buildContext() in unifiedMemory.ts.
+// Called from buildContext() in unifiedMemory.ts and from subconscious sleep.
 
 import { getDb } from '../database/db.js';
 import { createLogger } from '../utils/logger.js';
@@ -10,10 +10,11 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('Summarizer');
 
 // Threshold: summarize when new messages exceed this count since last summary
-const SUMMARY_THRESHOLD = 20;
+export const SUMMARY_THRESHOLD = 20;
 
 // Provider set externally (to avoid circular dependency with agent)
 let summarizeProvider: ((messages: string) => Promise<string>) | null = null;
+let _providerSetAt = 0;
 
 /**
  * Set the LLM provider function for summarization.
@@ -21,6 +22,15 @@ let summarizeProvider: ((messages: string) => Promise<string>) | null = null;
  */
 export function setSummarizeProvider(fn: (messages: string) => Promise<string>): void {
     summarizeProvider = fn;
+    _providerSetAt = Date.now();
+    log.info('Summarize provider registered');
+}
+
+/**
+ * Check if summarize provider is available
+ */
+export function hasSummarizeProvider(): boolean {
+    return summarizeProvider !== null;
 }
 
 /**
@@ -56,8 +66,15 @@ export function getSummary(chatId: string): string {
  * This is designed to run asynchronously (non-blocking).
  */
 export async function maybeSummarize(chatId: string): Promise<void> {
-    if (!summarizeProvider) return;
-    if (!needsSummary(chatId)) return;
+    // ✅ FIX: แจ้งเตือนชัดเจนเมื่อไม่มี provider แทนที่จะ return เงียบ
+    if (!summarizeProvider) {
+        log.warn(`Cannot summarize ${chatId}: no summarize provider registered. Call setSummarizeProvider() first.`);
+        return;
+    }
+    if (!needsSummary(chatId)) {
+        log.debug(`Conversation ${chatId} does not need summarization yet`);
+        return;
+    }
 
     try {
         const db = getDb();
@@ -86,8 +103,12 @@ export async function maybeSummarize(chatId: string): Promise<void> {
             db.prepare('UPDATE conversations SET summary = ?, summary_msg_count = ? WHERE id = ?')
                 .run(summary, totalMsgs.c, chatId);
             log.info('Summarized conversation', { chatId, length: summary.length });
+        } else {
+            log.warn(`Summarization returned empty/short result for ${chatId}`);
         }
     } catch (err: any) {
         log.error('Summarization failed', { chatId, error: err.message });
+        // ✅ FIX: re-throw เพื่อให้ caller (subconscious) จัดการ error ได้
+        throw err;
     }
 }

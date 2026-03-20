@@ -9,22 +9,71 @@ import { getDb, upsertConversation } from '../database/db.js';
 import { listBots, getBot, updateBot, createBot, type BotInstance } from './registries/botRegistry.js';
 import axios from 'axios';
 import { Part } from '@google/genai';
+import { isAdminCommand, handleAdminCommand, isBossModeActive } from '../terminal/messagingBridge.js';
+import { approvalSystem } from '../utils/approvalSystem.js';
+import { getProviderApiKey } from '../config/settingsSecurity.js';
+import { getAgentCompatibleProviders } from '../providers/agentRuntime.js';
+import { verifyCliConnections } from '../terminal/commandRouter.js';
+import { createLogger } from '../utils/logger.js';
 
 dotenv.config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const TELEGRAM_MESSAGE_MAX_LENGTH = 4096;
+const TELEGRAM_TYPING_PULSE_MS = 4500;
+const TELEGRAM_HANDLER_TIMEOUT_MS = 240_000;
+const STARTUP_COMPACT = process.env.STARTUP_COMPACT === '1';
+const logger = createLogger('BotManager');
 
-// Shared AI Agent (singleton — all bots share the same Gemini connection)
-const aiAgent = GEMINI_API_KEY ? new Agent(GEMINI_API_KEY) : null;
+function botInfo(message: string): void {
+    if (!STARTUP_COMPACT) {
+        logger.info(message);
+    }
+}
 
-// ── Active Bot Instances ─────────────────────────────
-// Maps bot registry ID → running instance handle
+function hasConfiguredLlmApiKey(): boolean {
+    try {
+        return getAgentCompatibleProviders({ enabledOnly: true }).some((provider) => Boolean(getProviderApiKey(provider.id)));
+    } catch {
+        return Boolean(
+            process.env.GEMINI_API_KEY?.trim() ||
+            process.env.OPENAI_API_KEY?.trim() ||
+            process.env.MINIMAX_API_KEY?.trim()
+        );
+    }
+}
+
+// Shared AI Agent (singleton)
+let aiAgent: Agent | null = null;
+
+function getAiAgent(): Agent | null {
+    if (aiAgent) {
+        return aiAgent;
+    }
+
+    if (!hasConfiguredLlmApiKey()) {
+        return null;
+    }
+
+    try {
+        aiAgent = new Agent(process.env.GEMINI_API_KEY || '');
+        return aiAgent;
+    } catch (err) {
+        console.error('[BotManager] Failed to initialize shared AI Agent:', err);
+        return null;
+    }
+}
+
+// Active bot instances
+// Maps bot registry ID to the running instance handle
 const activeBots = new Map<string, { type: string; instance: any; stop: () => void }>();
+
+// Maps LINE bot ID -> its currently active Express router
+const lineRouters = new Map<string, express.Router>();
 
 // Store Express app reference for dynamic bot start/stop from dashboard
 let _expressApp: express.Express | null = null;
 
-// ── Helpers ──────────────────────────────────────────
+// Helpers
 
 async function getGeminiPartFromTelegram(ctx: any, fileId: string, mimeType: string): Promise<Part> {
     const fileLink = await ctx.telegram.getFileLink(fileId);
@@ -33,106 +82,199 @@ async function getGeminiPartFromTelegram(ctx: any, fileId: string, mimeType: str
     return { inlineData: { data, mimeType } };
 }
 
-// ── Telegram Bot Factory ─────────────────────────────
+async function sendTelegramText(bot: Telegraf<any>, chatId: number | string, text: string): Promise<void> {
+    const message = String(text || '').trim() || '(no output)';
+    for (let i = 0; i < message.length; i += TELEGRAM_MESSAGE_MAX_LENGTH) {
+        const chunk = message.substring(i, i + TELEGRAM_MESSAGE_MAX_LENGTH);
+        await bot.telegram.sendMessage(chatId, chunk);
+    }
+}
+
+function runTelegramAdminCommandAsync(
+    bot: Telegraf<any>,
+    botId: string,
+    chatId: number,
+    userMessage: string,
+    userId: string
+): void {
+    const typingPulse = setInterval(() => {
+        void bot.telegram.sendChatAction(chatId, 'typing').catch(() => undefined);
+    }, TELEGRAM_TYPING_PULSE_MS);
+
+    void bot.telegram.sendChatAction(chatId, 'typing').catch(() => undefined);
+
+    void (async () => {
+        try {
+            const result = await handleAdminCommand(userMessage, 'telegram', userId);
+            await sendTelegramText(bot, chatId, result);
+        } catch (err: any) {
+            console.error(`[Telegram:${botId}] Admin command error:`, err);
+            await sendTelegramText(bot, chatId, `[Error] ${err?.message || 'Admin command failed'}`);
+        } finally {
+            clearInterval(typingPulse);
+        }
+    })();
+}
+
+// Telegram bot helpers
+
+async function handleTelegramMultimodal(ctx: any, agent: Agent, botConfig: BotInstance) {
+    const chatId = `telegram_${ctx.chat.id.toString()}`;
+    let fileId = '';
+    let mimeType = '';
+
+    if ('document' in ctx.message) {
+        fileId = ctx.message.document.file_id;
+        mimeType = ctx.message.document.mime_type || 'application/octet-stream';
+    } else if ('photo' in ctx.message) {
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        fileId = photo.file_id;
+        mimeType = 'image/jpeg';
+    }
+
+    if (fileId) {
+        await ctx.reply('Analyzing file/image with multimodal pipeline...');
+        try {
+            const attachmentPart = await getGeminiPartFromTelegram(ctx, fileId, mimeType);
+            const caption = ('caption' in ctx.message ? ctx.message.caption : null) || 'Please analyze this file/image.';
+            upsertConversation(chatId, ctx.chat.id.toString(), 'Telegram User');
+            const agentResponse = await agent.processMessage(
+                chatId,
+                caption,
+                {
+                    botId: botConfig.id,
+                    botName: botConfig.name,
+                    platform: 'telegram',
+                    replyWithFile: async (fp: string, cap?: string) => {
+                        await ctx.replyWithDocument({ source: fp }, { caption: cap });
+                        return 'File sent successfully';
+                    },
+                },
+                [attachmentPart],
+            );
+            await ctx.reply(agentResponse);
+        } catch (err) {
+            console.error(`[Telegram:${botConfig.id}] Multimodal Error:`, err);
+            await ctx.reply('Failed to analyze the attached file/image.');
+        }
+    }
+}
+
+async function handleTelegramText(ctx: any, bot: Telegraf<any>, agent: Agent, botConfig: BotInstance) {
+    const userMessage = ctx.message.text;
+    const chatId = `telegram_${ctx.chat.id.toString()}`;
+    // Allow admin commands and empty messages (in boss mode) to pass
+    if (userMessage.startsWith('/') && !userMessage.startsWith('/admin')) return;
+
+    const userId = ctx.from?.id?.toString() || '';
+
+    // Intercept admin commands AND active Boss Mode sessions from text
+    if (isAdminCommand(userMessage) || isBossModeActive('telegram', userId)) {
+        runTelegramAdminCommandAsync(bot, botConfig.id, ctx.chat.id, userMessage, userId);
+        return;
+    }
+
+    console.log(`[Telegram:${botConfig.id}] ${chatId}: ${userMessage}`);
+    await ctx.sendChatAction('typing');
+
+    try {
+        upsertConversation(chatId, ctx.chat.id.toString(), "Telegram User");
+        const responseText = await agent.processMessage(chatId, userMessage, {
+            botId: botConfig.id,
+            botName: botConfig.name,
+            platform: 'telegram',
+            replyWithFile: async (filePath: string, caption?: string) => {
+                await ctx.replyWithDocument({ source: filePath }, { caption });
+                return `Sent file ${filePath} successfully`;
+            }
+        });
+        await sendTelegramText(bot, ctx.chat.id, responseText);
+    } catch (err: any) {
+        console.error(`[Telegram:${botConfig.id}] Reply Error:`, err);
+        await sendTelegramText(bot, ctx.chat.id, 'An error occurred while sending a reply.');
+    }
+}
+
+function setupTelegramBotHandlers(bot: Telegraf<any>, agent: Agent, botConfig: BotInstance) {
+    bot.catch(async (err, ctx) => {
+        const errorText = String((err as any)?.message || err || '');
+        console.error(`[Telegram:${botConfig.id}] Update handler error:`, err);
+        if (/Promise timed out/i.test(errorText)) {
+            try {
+                await ctx.reply('Command is taking too long. Please try again.');
+            } catch {
+                // ignore reply failure
+            }
+        }
+    });
+
+    bot.start((ctx) => {
+        ctx.reply(`Hello! I am ${botConfig.name} - Personal AI Assistant`);
+    });
+
+    bot.command('clear', (ctx) => {
+        const chatId = ctx.chat.id.toString();
+        clearMemory(`telegram_${chatId}`);
+        ctx.reply('Memory cleared successfully.');
+    });
+
+    bot.on(['document', 'photo'], (ctx) => handleTelegramMultimodal(ctx, agent, botConfig));
+
+    // Handle Approval System Inline Callbacks
+    bot.action(/^(approve|reject)_(.+)$/, async (ctx) => {
+        const action = ctx.match[1];
+        const approvalId = ctx.match[2];
+        const isApproved = action === 'approve';
+        
+        const resolved = approvalSystem.resolveApproval(approvalId, isApproved);
+        
+        if (resolved) {
+            await ctx.editMessageText(`[OK] Request ${isApproved ? 'approved' : 'rejected'} successfully.`);
+        } else {
+            await ctx.answerCbQuery('This approval request is expired or already handled.');
+        }
+    });
+
+    bot.on('text', (ctx) => handleTelegramText(ctx, bot, agent, botConfig));
+}
+
+// Telegram bot factory
 
 function startTelegramBot(botConfig: BotInstance): void {
-    if (!aiAgent) return;
+    const agent = getAiAgent();
+    if (!agent) {
+        updateBot(botConfig.id, { status: 'error', last_error: 'No configured LLM provider key' });
+        return;
+    }
     const token = botConfig.credentials.bot_token;
     if (!token) {
-        console.warn(`[BotManager] Telegram bot "${botConfig.id}" — missing bot_token`);
+        console.warn(`[BotManager] Telegram bot "${botConfig.id}" - missing bot_token`);
         updateBot(botConfig.id, { status: 'error', last_error: 'Missing bot_token' });
         return;
     }
 
     try {
-        const bot = new Telegraf(token);
+        const bot = new Telegraf(token, { handlerTimeout: TELEGRAM_HANDLER_TIMEOUT_MS });
 
-        bot.start((ctx) => {
-            ctx.reply(`สวัสดีครับ! ผมคือ ${botConfig.name} — Personal AI Assistant`);
-        });
+        setupTelegramBotHandlers(bot, agent, botConfig);
 
-        bot.command('clear', (ctx) => {
-            const chatId = ctx.chat.id.toString();
-            clearMemory(`telegram_${chatId}`);
-            ctx.reply("🧹 ล้างความจำเรียบร้อยแล้วครับ");
-        });
-
-        bot.on(['document', 'photo'], async (ctx) => {
-            const chatId = `telegram_${ctx.chat.id.toString()}`;
-            let fileId = '';
-            let mimeType = '';
-
-            if ('document' in ctx.message) {
-                fileId = ctx.message.document.file_id;
-                mimeType = ctx.message.document.mime_type || 'application/octet-stream';
-            } else if ('photo' in ctx.message) {
-                const photo = ctx.message.photo[ctx.message.photo.length - 1];
-                fileId = photo.file_id;
-                mimeType = 'image/jpeg';
-            }
-
-            if (fileId) {
-                await ctx.reply("🧠 กำลังวิเคราะห์ไฟล์/รูปภาพด้วยพลัง Multimodal...");
-                try {
-                    const attachmentPart = await getGeminiPartFromTelegram(ctx, fileId, mimeType);
-                    const caption = ('caption' in ctx.message ? ctx.message.caption : null) || "ช่วยวิเคราะห์ไฟล์/รูปภาพนี้ให้หน่อยครับ";
-                    upsertConversation(chatId, ctx.chat.id.toString(), "Telegram User");
-                    const agentResponse = await aiAgent!.processMessage(
-                        chatId, caption,
-                        { botId: botConfig.id, botName: botConfig.name, platform: 'telegram', replyWithFile: async (fp: string, cap?: string) => { await ctx.replyWithDocument({ source: fp }, { caption: cap }); return 'ส่งสำเร็จ'; } },
-                        [attachmentPart]
-                    );
-                    await ctx.reply(agentResponse);
-                } catch (err) {
-                    console.error(`[Telegram:${botConfig.id}] Multimodal Error:`, err);
-                    await ctx.reply("❌ เกิดข้อผิดพลาดในการวิเคราะห์ไฟล์");
-                }
-            }
-        });
-
-        bot.on('text', async (ctx) => {
-            const userMessage = ctx.message.text;
-            const chatId = `telegram_${ctx.chat.id.toString()}`;
-            if (userMessage.startsWith('/')) return;
-            console.log(`[Telegram:${botConfig.id}] ${chatId}: ${userMessage}`);
-            await ctx.sendChatAction('typing');
-
-            try {
-                upsertConversation(chatId, ctx.chat.id.toString(), "Telegram User");
-                const responseText = await aiAgent!.processMessage(chatId, userMessage, {
-                    botId: botConfig.id,
-                    botName: botConfig.name,
-                    platform: 'telegram',
-                    replyWithFile: async (filePath: string, caption?: string) => {
-                        await ctx.replyWithDocument({ source: filePath }, { caption });
-                        return `ส่งไฟล์ ${filePath} ให้ผู้ใช้เรียบร้อย`;
-                    }
-                });
-                if (responseText.length > 4096) {
-                    for (let i = 0; i < responseText.length; i += 4096) {
-                        await ctx.reply(responseText.substring(i, i + 4096));
-                    }
-                } else {
-                    await ctx.reply(responseText);
-                }
-            } catch (err: any) {
-                console.error(`[Telegram:${botConfig.id}] Reply Error:`, err);
-                await ctx.reply("เกิดข้อผิดพลาดในการตอบกลับครับ");
-            }
-        });
-
-        bot.launch().then(() => {
-            console.log(`✅ Telegram Bot "${botConfig.id}" Ready`);
+        bot.launch({ dropPendingUpdates: true }).then(() => {
+            botInfo(`[BotManager] Telegram bot "${botConfig.id}" ready`);
             updateBot(botConfig.id, { status: 'active', last_error: null });
         }).catch((err: any) => {
             console.error(`[BotManager] Telegram bot "${botConfig.id}" launch failed:`, err);
-            updateBot(botConfig.id, { status: 'error', last_error: err.message });
+            const raw = String(err?.description || err?.message || err || '');
+            const isConflict = /409|terminated by other getUpdates request|Conflict/i.test(raw);
+            const humanMessage = isConflict
+                ? '409 Telegram polling conflict: token is being used by another running bot/process'
+                : raw;
+            updateBot(botConfig.id, { status: 'error', last_error: humanMessage });
         });
 
         activeBots.set(botConfig.id, {
             type: 'telegram',
             instance: bot,
-            stop: () => { try { bot.stop('SHUTDOWN'); } catch { } },
+            stop: () => { try { bot.stop('SHUTDOWN'); } catch (e) { console.debug('[BotManager] stop:', String(e)); } },
         });
     } catch (err: any) {
         console.error(`[BotManager] Telegram bot "${botConfig.id}" error:`, err);
@@ -140,15 +282,19 @@ function startTelegramBot(botConfig: BotInstance): void {
     }
 }
 
-// ── LINE Bot Factory ─────────────────────────────────
+// LINE bot factory
 
 function startLineBot(app: express.Express, botConfig: BotInstance): void {
-    if (!aiAgent) return;
+    const agent = getAiAgent();
+    if (!agent) {
+        updateBot(botConfig.id, { status: 'error', last_error: 'No configured LLM provider key' });
+        return;
+    }
     const accessToken = botConfig.credentials.channel_access_token;
     const secret = botConfig.credentials.channel_secret;
 
     if (!accessToken || !secret) {
-        console.warn(`[BotManager] LINE bot "${botConfig.id}" — missing credentials`);
+        console.warn(`[BotManager] LINE bot "${botConfig.id}" - missing credentials`);
         updateBot(botConfig.id, { status: 'error', last_error: 'Missing channel_access_token or channel_secret' });
         return;
     }
@@ -160,12 +306,15 @@ function startLineBot(app: express.Express, botConfig: BotInstance): void {
         // Register both the new path AND the legacy /webhook/line path for backward compat
         const webhookPaths = [`/webhook/line/${botConfig.id}`];
         // If this is the env-migrated bot, also listen on the original /webhook/line
-        if (botConfig.id === 'env-line') {
+        if (String(botConfig.id || '').toLowerCase() === 'env-line') {
             webhookPaths.push('/webhook/line');
         }
 
+        // Create an isolated router for this LINE bot so we can unmount it later
+        const lineRouter = express.Router();
+
         for (const webhookPath of webhookPaths) {
-            app.post(webhookPath, lineMiddleware(lineConfig), (req, res) => {
+            lineRouter.post(webhookPath, lineMiddleware(lineConfig), (req, res) => {
                 res.status(200).json({});
 
                 const eventPromises = (req.body.events || []).map(async (event: WebhookEvent) => {
@@ -177,9 +326,17 @@ function startLineBot(app: express.Express, botConfig: BotInstance): void {
                     if (!userId) return;
 
                     try {
+                        // Intercept admin commands AND active Boss Mode sessions from LINE
+                        if (isAdminCommand(userMessage) || isBossModeActive('line', userId)) {
+                            const result = await handleAdminCommand(userMessage, 'line', userId);
+                            const trimmed = result.length > 5000 ? result.substring(0, 4997) + '...' : result;
+                            await lineClient.pushMessage(userId, { type: 'text', text: trimmed });
+                            return;
+                        }
+
                         console.log(`[LINE:${botConfig.id}] ${chatId}: ${userMessage}`);
                         upsertConversation(chatId, userId, "LINE User");
-                        const responseText = await aiAgent!.processMessage(chatId, userMessage, {
+                        const responseText = await agent.processMessage(chatId, userMessage, {
                             botId: botConfig.id,
                             botName: botConfig.name,
                             platform: 'line',
@@ -198,12 +355,12 @@ function startLineBot(app: express.Express, botConfig: BotInstance): void {
                                         message = { type: 'audio', originalContentUrl: fileUrl, duration: 60000 };
                                     } else {
                                         const fileName = fileUrl.split('/').pop() || 'file';
-                                        message = { type: 'text', text: `📎 ไฟล์: ${caption || fileName}\n🔗 ดาวน์โหลด: ${fileUrl}` };
+                                        message = { type: 'text', text: `File: ${caption || fileName}` + "\\n" + `Download: ${fileUrl}` };
                                     }
                                     await lineClient.pushMessage(userId!, [message]);
-                                    return `ส่งไฟล์ให้ผู้ใช้เรียบร้อยแล้ว`;
+                                    return `Sent file link successfully`;
                                 } catch (err: any) {
-                                    return `ไม่สามารถส่งไฟล์ได้: ${err.message}`;
+                                    return `Failed to send file: ${err.message}`;
                                 }
                             }
                         });
@@ -223,13 +380,32 @@ function startLineBot(app: express.Express, botConfig: BotInstance): void {
             });
         }
 
-        console.log(`✅ LINE Bot "${botConfig.id}" Webhook at ${webhookPaths.join(', ')}`);
+        // Add a custom property to the router function to find it later
+        (lineRouter as any).botId = botConfig.id;
+        
+        // Mount the router under root (webhook paths already contain /webhook)
+        app.use('/', lineRouter);
+        lineRouters.set(botConfig.id, lineRouter);
+
+        botInfo(`[BotManager] LINE bot "${botConfig.id}" webhook ready at ${webhookPaths.join(', ')}`);
         updateBot(botConfig.id, { status: 'active', last_error: null });
 
         activeBots.set(botConfig.id, {
             type: 'line',
             instance: lineClient,
-            stop: () => { /* LINE webhooks are Express routes — no graceful stop needed */ },
+            stop: () => {
+                // Remove the router from Express stack to prevent route stacking
+                const stack = (app as any)._router?.stack;
+                if (stack) {
+                    // Try to find the layer that contains our specific router
+                    const idx = stack.findIndex((layer: any) => layer.handle && layer.handle.botId === botConfig.id);
+                    if (idx >= 0) {
+                        stack.splice(idx, 1);
+                        botInfo(`[BotManager] Removed Express router for LINE bot "${botConfig.id}"`);
+                    }
+                }
+                lineRouters.delete(botConfig.id);
+            },
         });
     } catch (err: any) {
         console.error(`[BotManager] LINE bot "${botConfig.id}" error:`, err);
@@ -237,7 +413,7 @@ function startLineBot(app: express.Express, botConfig: BotInstance): void {
     }
 }
 
-// ── Legacy Environment Migration ─────────────────────
+// Legacy environment migration
 // Auto-create bot_instances from .env vars for backward compatibility
 
 function migrateEnvBots(): void {
@@ -255,12 +431,12 @@ function migrateEnvBots(): void {
                 credentials: { bot_token: BOT_TOKEN },
             });
             updateBot('env-telegram', { status: 'active' });
-            console.log('[BotManager] Migrated TELEGRAM_BOT_TOKEN from .env → bot registry');
+            botInfo('[BotManager] Migrated TELEGRAM_BOT_TOKEN from .env -> bot registry');
         } else if (existing.status === 'stopped') {
             // If it was previously created but stopped (e.g. from old buggy migration),
             // re-activate it on server restart since the env var is present
             updateBot('env-telegram', { status: 'active', last_error: null });
-            console.log('[BotManager] Re-activated env-telegram bot');
+            botInfo('[BotManager] Re-activated env-telegram bot');
         }
     }
 
@@ -274,25 +450,25 @@ function migrateEnvBots(): void {
                 credentials: { channel_access_token: LINE_TOKEN, channel_secret: LINE_SECRET },
             });
             updateBot('env-line', { status: 'active' });
-            console.log('[BotManager] Migrated LINE credentials from .env → bot registry');
+            botInfo('[BotManager] Migrated LINE credentials from .env -> bot registry');
         } else if (existing.status === 'stopped') {
             updateBot('env-line', { status: 'active', last_error: null });
-            console.log('[BotManager] Re-activated env-line bot');
+            botInfo('[BotManager] Re-activated env-line bot');
         }
     }
 }
 
-// ── Public API ───────────────────────────────────────
+// Public API
 
 /** Start a single bot by registry ID (uses stored app reference) */
 export function startBotInstance(app: express.Express | null, botId: string): boolean {
     const effectiveApp = app || _expressApp;
     if (!effectiveApp) {
-        console.error(`[BotManager] Cannot start bot "${botId}" — no Express app reference`);
+        console.error(`[BotManager] Cannot start bot "${botId}" - no Express app reference`);
         return false;
     }
-    if (!aiAgent) {
-        console.error(`[BotManager] Cannot start bot "${botId}" — no AI agent (missing GEMINI_API_KEY)`);
+    if (!getAiAgent()) {
+        console.error(`[BotManager] Cannot start bot "${botId}" - no configured LLM provider key`);
         return false;
     }
 
@@ -332,9 +508,8 @@ export function startBots(app: express.Express) {
     // Store app reference for later dynamic start/stop
     _expressApp = app;
 
-    if (!aiAgent) {
-        console.error("❌ ขาด GEMINI_API_KEY ในไฟล์ .env, บอท Telegram/LINE จะไม่ทำงาน");
-        return;
+    if (!getAiAgent()) {
+        console.error("[BotManager] Missing LLM provider keys. Telegram/LINE bots cannot start.");
     }
 
     // Migrate legacy .env bots to registry (one-time)
@@ -349,7 +524,12 @@ export function startBots(app: express.Express) {
         }
     }
 
-    // ── Dashboard API & Static Files ──
+    // Verify CLI API Health in the background
+    verifyCliConnections().catch((err: any) => {
+        console.error('[BotManager] Error verifying CLI connections:', err);
+    });
+
+    // Dashboard API and static files
     app.use('/personal-ai', express.static('public_personal_ai'));
 
     app.get('/api/config', (_req, res) => {
@@ -377,7 +557,8 @@ export function startBots(app: express.Express) {
     });
 
     app.post('/api/cli/chat', async (req, res) => {
-        if (!aiAgent) {
+        const agent = getAiAgent();
+        if (!agent) {
             res.status(500).json({ error: 'AI Agent is not initialized' });
             return;
         }
@@ -395,16 +576,16 @@ export function startBots(app: express.Express) {
                 botId: 'env-telegram',
                 botName: 'Web CLI Bot',
                 platform: 'telegram' as any,
-                replyWithText: async (text: string) => {
+                replyWithText: async (_text: string) => {
                     // For Web CLI, we don't stream back intermediate text yet, 
                     // we just return the final response.
                 },
-                replyWithFile: async (filePath: string, caption?: string) => {
-                    return 'ส่งสำเร็จ (File preview not fully supported in simple CLI)';
+                replyWithFile: async (_filePath: string, _caption?: string) => {
+                    return 'File sent successfully (file preview is limited in this simple CLI mode)';
                 }
             };
 
-            const responseText = await aiAgent.processMessage(chatId, message, ctx);
+            const responseText = await agent.processMessage(chatId, message, ctx);
             res.json({ reply: responseText });
         } catch (err: any) {
             console.error('[Web CLI] Error:', err);
@@ -413,7 +594,8 @@ export function startBots(app: express.Express) {
     });
 
     app.get('/api/models/:provider', async (req, res) => {
-        const models = aiAgent ? await aiAgent.getAvailableModels(req.params.provider) : [];
+        const agent = getAiAgent();
+        const models = agent ? await agent.getAvailableModels(req.params.provider) : [];
         res.json(models);
     });
 }
@@ -435,3 +617,6 @@ export function stopBots(): void {
 export function getActiveBotIds(): string[] {
     return Array.from(activeBots.keys());
 }
+
+
+

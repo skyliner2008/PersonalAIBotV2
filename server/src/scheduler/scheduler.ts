@@ -2,6 +2,9 @@ import cron from 'node-cron';
 import { addLog, dbAll, dbRun, cleanupOldLogs, cleanupOldProcessedMessages } from '../database/db.js';
 import { processPendingPosts } from '../automation/postManager.js';
 import type { Server as SocketServer } from 'socket.io';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('scheduler');
 
 let postCheckJob: cron.ScheduledTask | null = null;
 let maintenanceJob: cron.ScheduledTask | null = null;
@@ -39,7 +42,7 @@ export function startScheduler(io: SocketServer): void {
         );
         // Note: dbRun doesn't return changes count, so we log success
         episodesCleaned = -1; // indicate it ran
-      } catch { /* table may not exist in all setups */ }
+      } catch (e) { console.debug('[Scheduler] cleanup episodes:', String(e)); }
 
       // 4. Clean up old messages (>60 days, except active conversations)
       try {
@@ -48,15 +51,15 @@ export function startScheduler(io: SocketServer): void {
            AND conversation_id NOT IN (SELECT DISTINCT conversation_id FROM messages WHERE timestamp > datetime('now', '-7 days'))`,
           []
         );
-      } catch { }
+      } catch (e) { console.debug('[Scheduler] cleanup messages:', String(e)); }
 
       // 5. SQLite VACUUM (optimize storage)
       try {
         const { getDb: getDatabase } = require('../database/db.js');
         getDatabase().pragma('wal_checkpoint(TRUNCATE)');
-      } catch { }
+      } catch (e) { console.debug('[Scheduler] vacuum db:', String(e)); }
 
-      console.log(`[Scheduler] Daily maintenance: logs=${logsCleaned} dedup=${dedupCleaned} episodes=${episodesCleaned}`);
+      logger.info(`Daily maintenance: logs=${logsCleaned} dedup=${dedupCleaned} episodes=${episodesCleaned}`);
       addLog('scheduler', 'Daily maintenance complete',
         `Logs: ${logsCleaned}, Dedup: ${dedupCleaned}`, 'info');
     } catch (e) {

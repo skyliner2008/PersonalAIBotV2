@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
 import { addLog } from '../database/db.js';
+import { getBrowserHeadless } from '../config/runtimeSettings.js';
 let browser = null;
 let context = null;
 let mainPage = null;
@@ -14,8 +15,9 @@ export async function launchBrowser() {
     if (context)
         return context;
     fs.mkdirSync(config.cookiesDir, { recursive: true });
+    const headless = getBrowserHeadless();
     browser = await chromium.launch({
-        headless: config.headless,
+        headless,
         slowMo: config.slowMo,
         args: [
             '--disable-blink-features=AutomationControlled',
@@ -42,13 +44,13 @@ export async function launchBrowser() {
         try {
             const cookies = JSON.parse(fs.readFileSync(COOKIES_FILE, 'utf-8'));
             await context.addCookies(cookies);
-            addLog('browser', 'Restored saved cookies', null, 'info');
+            addLog('browser', 'Restored saved cookies', undefined, 'info');
         }
         catch (e) {
             addLog('browser', 'Failed to restore cookies', String(e), 'warning');
         }
     }
-    addLog('browser', 'Browser launched', `headless=${config.headless}`, 'success');
+    addLog('browser', 'Browser launched', `headless=${headless}`, 'success');
     return context;
 }
 /**
@@ -67,6 +69,16 @@ export async function saveCookies() {
 export async function getMainPage() {
     if (mainPage && !mainPage.isClosed())
         return mainPage;
+    // Close existing page if it exists but is closed to prevent orphaned resources
+    if (mainPage && mainPage.isClosed()) {
+        try {
+            await mainPage.close();
+        }
+        catch {
+            // Page already closed, ignore
+        }
+        mainPage = null;
+    }
     const ctx = await launchBrowser();
     mainPage = await ctx.newPage();
     return mainPage;
@@ -89,22 +101,28 @@ export async function closeBrowser() {
         try {
             await saveCookies();
         }
-        catch { }
+        catch (e) {
+            console.debug('[Browser] saveCookies:', String(e));
+        }
         try {
             await context.close();
         }
-        catch { }
+        catch (e) {
+            console.debug('[Browser] close context:', String(e));
+        }
         context = null;
     }
     if (browser) {
         try {
             await browser.close();
         }
-        catch { }
+        catch (e) {
+            console.debug('[Browser] close browser:', String(e));
+        }
         browser = null;
     }
     if (hadContext) {
-        addLog('browser', 'Browser closed', null, 'info');
+        addLog('browser', 'Browser closed', undefined, 'info');
     }
 }
 /**
@@ -127,5 +145,33 @@ export async function humanType(page, selector, text) {
 }
 export function isRunning() {
     return !!context && !!browser;
+}
+/**
+ * Navigate with exponential-backoff retry.
+ * Retries up to `maxRetries` times on navigation errors (network blips,
+ * Facebook rate-limit redirects, etc.) before throwing.
+ *
+ * @param page        - Playwright Page
+ * @param url         - URL to navigate to
+ * @param maxRetries  - How many attempts total (default 3)
+ * @param baseDelayMs - Initial wait before first retry in ms (default 1500)
+ */
+export async function navigateWithRetry(page, url, maxRetries = 3, baseDelayMs = 1500) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+            return; // success
+        }
+        catch (err) {
+            lastErr = err;
+            const backoff = baseDelayMs * Math.pow(2, attempt - 1); // 1.5s, 3s, 6s…
+            addLog('browser', `navigateWithRetry (attempt ${attempt}/${maxRetries})`, `url=${url} err=${String(err)} retrying in ${backoff}ms`, attempt < maxRetries ? 'warning' : 'error');
+            if (attempt < maxRetries) {
+                await humanDelay(backoff, backoff + 1000);
+            }
+        }
+    }
+    throw lastErr;
 }
 //# sourceMappingURL=browser.js.map

@@ -1,0 +1,114 @@
+{
+  "autoRouting": true,
+  "routes": {
+    "general": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.0-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "modelName": "gemini-2.5-flash"
+        },
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o-mini"
+        }
+      ]
+    },
+    "complex": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.5-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o"
+        },
+        {
+          "provider": "gemini",
+          "modelName": "gemini-2.0-flash"
+        }
+      ]
+    },
+    "vision": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.0-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "modelName": "gemini-2.5-flash"
+        }
+      ]
+    },
+    "web": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.0-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "modelName": "gemini-2.5-flash"
+        },
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o-mini"
+        }
+      ]
+    },
+    "thinking": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.5-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o"
+        }
+      ]
+    },
+    "code": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.5-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o"
+        }
+      ]
+    },
+    "data": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.5-flash"
+      },
+      "fallbacks": [
+        {
+          "provider": "openai",
+          "modelName": "gpt-4o"
+        }
+      ]
+    },
+    "system": {
+      "active": {
+        "provider": "gemini",
+        "modelName": "gemini-2.0-flash-lite"
+      },
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "modelName": "gemini-2.0-flash"
+        }
+      ]
+    }
+  },
+  "botOverrides": {}
+}

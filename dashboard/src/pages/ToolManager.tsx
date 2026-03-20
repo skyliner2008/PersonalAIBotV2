@@ -26,6 +26,7 @@ const categoryIcons: Record<string, string> = {
   web: '🔍',
   memory: '🧠',
   communication: '💬',
+  system: '🛠️',
 };
 
 const categoryLabels: Record<string, string> = {
@@ -36,6 +37,7 @@ const categoryLabels: Record<string, string> = {
   web: 'Web & Search',
   memory: 'Memory',
   communication: 'Communication',
+  system: 'System / Management',
 };
 
 const riskBadge: Record<string, { bg: string; text: string; icon: any }> = {

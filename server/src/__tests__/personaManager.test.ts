@@ -7,13 +7,13 @@ import { describe, it, expect } from 'vitest';
 // ---- Replicate the parsing pipeline from personaManager.ts ----
 // Testing the logic directly avoids file I/O and ESM module caching issues.
 
-/** Old (buggy) implementation — strips hyphens */
+/** Implementation that preserves hyphens */
 function parseToolsOld(toolsText: string): string[] {
   return toolsText
     .split('\n')
     .map(line => line.trim())
     .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('//'))
-    .map(line => line.replace(/[`*\-]/g, '').trim())  // BUG: strips hyphens
+    .map(line => line.replace(/^[`*\s]+|[`*\s]+$/g, '').trim())
     .filter(Boolean);
 }
 
@@ -27,12 +27,12 @@ function parseToolsNew(toolsText: string): string[] {
     .filter(Boolean);
 }
 
-describe('parseTools — old (buggy) behaviour documents the bug', () => {
-  it('OLD: incorrectly strips hyphens from tool names', () => {
+describe('parseTools — verify hyphen preservation', () => {
+  it('correctly preserves hyphens in tool names', () => {
     const result = parseToolsOld('web-search\nbrowser-navigate\n');
-    expect(result).toContain('websearch');
-    expect(result).toContain('browsernavigate');
-    expect(result).not.toContain('web-search');
+    expect(result).toContain('web-search');
+    expect(result).toContain('browser-navigate');
+    expect(result).not.toContain('websearch');
   });
 });
 

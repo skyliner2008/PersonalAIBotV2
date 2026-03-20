@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+.cred-salt
+.cred-secret
+
+# Data & Database
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temporary & Debug files
+output.json
+output2.json
+*.bak
+test_*.ts
+!server/test/
+report.ts
+check_models.ts
+
+# MiniMax config
+.minimax/

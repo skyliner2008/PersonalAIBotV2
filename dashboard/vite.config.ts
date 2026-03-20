@@ -8,22 +8,24 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, './src') },
   },
 
-  // Build output → dashboard/dist (Server จะ serve จากที่นี่)
+  // Build output goes to dashboard/dist (served by backend server)
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Chunk splitting สำหรับ performance
+    // Chunk splitting for performance
     rollupOptions: {
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           socket: ['socket.io-client'],
+          icons: ['lucide-react'],
         },
       },
     },
+    chunkSizeWarningLimit: 1000,
   },
 
-  // Dev server: proxy ไปหา Express server ที่ 3000
+  // Dev server: proxy to Express backend on port 3000
   server: {
     port: 5173,
     proxy: {

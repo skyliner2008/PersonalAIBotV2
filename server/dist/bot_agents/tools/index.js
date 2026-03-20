@@ -1,12 +1,21 @@
 import { Type } from '@google/genai';
-import { runCommand, runCommandDeclaration, openApplication, openApplicationDeclaration, closeApplication, closeApplicationDeclaration } from './os';
-import { listFiles, listFilesDeclaration, readFileContent, readFileContentDeclaration, writeFileContent, writeFileContentDeclaration, deleteFile, deleteFileDeclaration } from './file';
+import { runCommand, runCommandDeclaration, openApplication, openApplicationDeclaration, closeApplication, closeApplicationDeclaration, runPython, runPythonDeclaration, systemInfo, systemInfoDeclaration, screenshotDesktop, screenshotDesktopDeclaration, clipboardRead, clipboardReadDeclaration, clipboardWrite, clipboardWriteDeclaration, } from './os.js';
+import { listFiles, listFilesDeclaration, readFileContent, readFileContentDeclaration, writeFileContent, writeFileContentDeclaration, deleteFile, deleteFileDeclaration, replaceCodeBlock, replaceCodeBlockDeclaration } from './file.js';
 import { browserNavigate, browserNavigateDeclaration, browserClick, browserClickDeclaration, browserType, browserTypeDeclaration, browserClose, browserCloseDeclaration } from './browser.js';
 import { webSearch, webSearchDeclaration, readWebpage, readWebpageDeclaration, mouseClick, mouseClickDeclaration, keyboardType, keyboardTypeDeclaration } from './limitless.js';
+import { systemToolDeclarations, getSystemToolHandlers } from './system.js';
+import { evolutionToolDeclarations, getEvolutionToolHandlers } from './evolution.js';
+import { loadDynamicTools, getDynamicToolDeclarations, getDynamicToolHandlers, refreshDynamicTools } from './dynamicTools.js';
+import { swarmToolDeclarations, getSwarmToolHandlers } from '../../swarm/swarmTools.js';
+import { planningToolDeclarations, getPlanningToolHandlers } from './planning.js';
+import { uiToolDeclarations, getUiToolHandlers } from './ui.js';
+import { addCliAgent, addCliAgentDeclaration } from './cli_management.js';
+import { createLogger } from '../../utils/logger.js';
+const logger = createLogger('Tools');
 // Utility Tools
 const getCurrentTimeDeclaration = {
     name: "get_current_time",
-    description: "บอกเวลาปัจจุบันของระบบ เพื่อช่วยจัดตารางงาน",
+    description: "บอกเวลาปัจจุบันของระบบ เพื่อช่วยจัดตารางงานหรืออ้างอิงเวลา",
     parameters: { type: Type.OBJECT, properties: {} },
 };
 function getCurrentTime() {
@@ -14,7 +23,7 @@ function getCurrentTime() {
 }
 const echoMessageDeclaration = {
     name: "echo_message",
-    description: "พิมพ์ข้อความออกทางหน้าจอ Console ของเครื่องที่รันบอทอยู่",
+    description: "พิมพ์ข้อความออกทางหน้าจอ Console ของเครื่องที่รันบอทอยู่ (ใช้ debug หรือแจ้งเตือนฝั่ง server)",
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -24,7 +33,7 @@ const echoMessageDeclaration = {
     },
 };
 function echoMessage({ message }) {
-    console.log(`🤖 [AI SAY]: ${message}`);
+    logger.info(`🤖 [AI SAY]: ${message}`);
     return "พิมพ์ข้อความสำเร็จแล้ว";
 }
 // ==========================================
@@ -99,50 +108,157 @@ export const createSendFileHandler = (ctx) => {
         return await ctx.replyWithFile(file_path, caption);
     };
 };
+// ==========================================
+// Memory Management Tools
+// ==========================================
+import { searchArchival, saveArchivalFact } from '../../memory/unifiedMemory.js';
+export const memorySearchDeclaration = {
+    name: "memory_search",
+    description: "ค้นหาข้อมูลจากความทรงจำระยะยาว (Archival Memory) ของผู้ใช้ ใช้เมื่อต้องการดึงข้อมูลเก่าที่เคยคุยกัน เช่น ชื่อ งาน สิ่งที่ชอบ",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            query: { type: Type.STRING, description: "คำค้นหา เช่น 'ชื่อผู้ใช้', 'งานอดิเรก', 'อาหารที่ชอบ'" },
+        },
+        required: ["query"],
+    },
+};
+export const memorySaveDeclaration = {
+    name: "memory_save",
+    description: "บันทึกข้อเท็จจริงใหม่เกี่ยวกับผู้ใช้ลงในความทรงจำระยะยาว ใช้เมื่อผู้ใช้บอกข้อมูลเกี่ยวกับตนเอง เช่น ชื่อ อาชีพ ความชอบ",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            fact: { type: Type.STRING, description: "ข้อเท็จจริงที่ต้องการบันทึก เช่น 'ผู้ใช้ชื่อ สมชาย ทำงานเป็นวิศวกร'" },
+        },
+        required: ["fact"],
+    },
+};
+// Initialize function to load dynamic tools at startup
+let dynamicToolsLoaded = false;
+async function initializeToolsAsync() {
+    if (!dynamicToolsLoaded) {
+        await loadDynamicTools();
+        dynamicToolsLoaded = true;
+    }
+}
+// Call initialization (non-blocking)
+initializeToolsAsync().catch(err => console.error('Failed to load dynamic tools:', err));
 export const tools = [
+    // Utility
     getCurrentTimeDeclaration,
     echoMessageDeclaration,
+    // OS Control
     runCommandDeclaration,
+    runPythonDeclaration,
     openApplicationDeclaration,
     closeApplicationDeclaration,
+    systemInfoDeclaration,
+    screenshotDesktopDeclaration,
+    clipboardReadDeclaration,
+    clipboardWriteDeclaration,
+    // File Operations
     listFilesDeclaration,
     readFileContentDeclaration,
     writeFileContentDeclaration,
     deleteFileDeclaration,
+    replaceCodeBlockDeclaration,
     sendFileToChatDeclaration,
     // Browser Tools
     browserNavigateDeclaration,
     browserClickDeclaration,
     browserTypeDeclaration,
     browserCloseDeclaration,
-    // Limitless Tools
+    // Web & Search Tools
     webSearchDeclaration,
     readWebpageDeclaration,
     mouseClickDeclaration,
-    keyboardTypeDeclaration
+    keyboardTypeDeclaration,
+    // Memory Tools
+    memorySearchDeclaration,
+    memorySaveDeclaration,
+    // System Self-Awareness Tools
+    ...systemToolDeclarations,
+    // Self-Evolution Tools
+    ...evolutionToolDeclarations,
+    // Swarm Coordination Tools
+    ...swarmToolDeclarations,
+    // Stateful Planning Tools
+    ...planningToolDeclarations,
+    // Generative UI Tools
+    ...uiToolDeclarations,
+    // CLI Management Tools
+    addCliAgentDeclaration,
 ];
-export const getFunctionHandlers = (ctx) => {
-    return {
+/**
+ * Get all tools including dynamic ones
+ */
+export function getAllTools() {
+    return [...tools, ...getDynamicToolDeclarations()];
+}
+export const getFunctionHandlers = (ctx, sysCtx, chatId) => {
+    const effectiveChatId = chatId || 'system_fallback';
+    const handlers = {
+        // Utility
         get_current_time: getCurrentTime,
         echo_message: echoMessage,
-        run_command: runCommand,
+        // OS Control
+        run_command: (args) => runCommand(args, { chatId: effectiveChatId }),
+        run_python: runPython,
         open_application: openApplication,
         close_application: closeApplication,
+        system_info: systemInfo,
+        screenshot_desktop: screenshotDesktop,
+        clipboard_read: clipboardRead,
+        clipboard_write: clipboardWrite,
+        // File Operations
         list_files: listFiles,
         read_file_content: readFileContent,
         write_file_content: writeFileContent,
         delete_file: deleteFile,
+        replace_code_block: replaceCodeBlock,
         send_file_to_chat: createSendFileHandler(ctx),
-        // Browser Handlers
+        // Browser
         browser_navigate: browserNavigate,
         browser_click: browserClick,
         browser_type: browserType,
         browser_close: browserClose,
-        // Limitless Handlers
+        // Web & Search
         web_search: webSearch,
         read_webpage: readWebpage,
         mouse_click: mouseClick,
-        keyboard_type: keyboardType
+        keyboard_type: keyboardType,
+        // Memory Management
+        memory_search: async (args) => {
+            const query = String(args.query ?? '');
+            const facts = await searchArchival(effectiveChatId, query, 5, 0.55);
+            if (facts.length === 0)
+                return '🧠 ไม่พบข้อมูลที่เกี่ยวข้องในความทรงจำ';
+            return `🧠 ข้อมูลที่พบ:\n${facts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
+        },
+        memory_save: async (args) => {
+            const fact = String(args.fact ?? '');
+            await saveArchivalFact(effectiveChatId, fact);
+            return `✅ บันทึกลงความทรงจำแล้ว: "${fact}"`;
+        },
     };
+    // Register System Self-Awareness tools
+    if (sysCtx) {
+        Object.assign(handlers, getSystemToolHandlers(sysCtx));
+    }
+    Object.assign(handlers, getEvolutionToolHandlers());
+    Object.assign(handlers, getSwarmToolHandlers(ctx));
+    Object.assign(handlers, getPlanningToolHandlers(effectiveChatId));
+    Object.assign(handlers, getUiToolHandlers(effectiveChatId));
+    handlers.add_cli_agent = addCliAgent;
+    Object.assign(handlers, getDynamicToolHandlers());
+    return handlers;
 };
+export async function refreshDynamicToolsRegistry() {
+    await refreshDynamicTools();
+}
+/** @deprecated Legacy */
+export function setCurrentChatId(_chatId) { }
+/** @deprecated Legacy */
+export function getCurrentChatId() { return ''; }
 //# sourceMappingURL=index.js.map

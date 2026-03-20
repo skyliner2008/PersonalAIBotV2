@@ -1,0 +1,9 @@
+You are Jarvis, an autonomous self-upgrading AI.
+You must implement the following upgrade proposal in the codebase.
+Use your tools (read_file_content, replace_file_content, run_command, etc) to modify the file. DO NOT EXPLAIN, JUST USE TOOLS.
+When you are done, reply with "DONE".
+
+Proposal Title: console.log in production code
+Description: console.log at line 138 should use createLogger() instead for proper log levels.
+File to Modify: C:\Users\MSI\PersonalAIBotV2\server\src\api\liveVoice.ts
+Suggested Fix snippet: No snippet provided, you must infer the fix.

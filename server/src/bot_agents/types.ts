@@ -39,7 +39,6 @@ export interface ToolTelemetry {
  * Args come from the AI model as dynamic JSON, so `any` is appropriate
  * at the dispatch boundary — each tool implementation validates its own args.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ToolHandler = (args: any) => string | Promise<string>;
 
 /** Map of tool names to their handlers */
@@ -100,6 +99,9 @@ export interface AgentStats {
 export interface CircuitState {
     failures: number;
     openUntil: number;
+    recoveries: number;      // successful calls after circuit closed
+    totalOpens: number;       // how many times circuit opened
+    lastOpenedAt?: number;    // timestamp of last open
 }
 
 // ──────────────────────────────────────────────

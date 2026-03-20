@@ -14,8 +14,10 @@ import {
   type ToolCategory,
   type ToolPlatform,
 } from '../bot_agents/registries/toolRegistry.js';
+import { requireAuth } from '../utils/auth.js';
 
 const router = Router();
+router.use(requireAuth('viewer'));
 
 /**
  * GET /api/tools

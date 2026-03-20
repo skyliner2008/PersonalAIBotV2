@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
 import { addLog } from '../database/db.js';
+import { getBrowserHeadless } from '../config/runtimeSettings.js';
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
@@ -18,8 +19,10 @@ export async function launchBrowser(): Promise<BrowserContext> {
 
   fs.mkdirSync(config.cookiesDir, { recursive: true });
 
+  const headless = getBrowserHeadless();
+
   browser = await chromium.launch({
-    headless: config.headless,
+    headless,
     slowMo: config.slowMo,
     args: [
       '--disable-blink-features=AutomationControlled',
@@ -55,7 +58,7 @@ export async function launchBrowser(): Promise<BrowserContext> {
     }
   }
 
-  addLog('browser', 'Browser launched', `headless=${config.headless}`, 'success');
+  addLog('browser', 'Browser launched', `headless=${headless}`, 'success');
   return context;
 }
 
@@ -74,6 +77,17 @@ export async function saveCookies(): Promise<void> {
  */
 export async function getMainPage(): Promise<Page> {
   if (mainPage && !mainPage.isClosed()) return mainPage;
+
+  // Close existing page if it exists but is closed to prevent orphaned resources
+  if (mainPage && mainPage.isClosed()) {
+    try {
+      await mainPage.close();
+    } catch {
+      // Page already closed, ignore
+    }
+    mainPage = null;
+  }
+
   const ctx = await launchBrowser();
   mainPage = await ctx.newPage();
   return mainPage;
@@ -96,12 +110,12 @@ export async function closeBrowser(): Promise<void> {
   mainPage = null;
 
   if (context) {
-    try { await saveCookies(); } catch {}
-    try { await context.close(); } catch {}
+    try { await saveCookies(); } catch (e) { console.debug('[Browser] saveCookies:', String(e)); }
+    try { await context.close(); } catch (e) { console.debug('[Browser] close context:', String(e)); }
     context = null;
   }
   if (browser) {
-    try { await browser.close(); } catch {}
+    try { await browser.close(); } catch (e) { console.debug('[Browser] close browser:', String(e)); }
     browser = null;
   }
   if (hadContext) {

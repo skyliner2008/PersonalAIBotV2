@@ -24,12 +24,28 @@
   const FILTER_WAIT_MS = 2500;    // wait after clicking filter
 
   // ================================================================
-  // ABORT CONTROL — generation counter
+  // ABORT CONTROL — generation counter + server-stored abort timestamp
   // Every time auto-reply is toggled, generation increments.
   // All async functions receive `gen` param and check before continuing.
+  // Also check server-stored abortGenerationTime to handle sync across tabs.
   // ================================================================
   let generation = 0;
-  function aborted(gen) { return gen !== generation; }
+  let localAbortTime = 0; // Last abortGenerationTime we saw from server
+
+  function aborted(gen) {
+    return gen !== generation;
+  }
+
+  async function checkServerAbortTime() {
+    const state = await loadState();
+    const serverAbortTime = state.abortGenerationTime || 0;
+    if (serverAbortTime > localAbortTime) {
+      localAbortTime = serverAbortTime;
+      generation++;
+      return true;
+    }
+    return false;
+  }
 
   // ================================================================
   // MODULE-LEVEL CLEANUP REFS
@@ -337,6 +353,12 @@
     setBadge('scanning');
     await saveState({ mode: 'scanning' });
 
+    // Check if abort was requested from another tab
+    if (await checkServerAbortTime()) {
+      log('warn', 'Scan aborted (server abort time detected)');
+      return;
+    }
+
     // Wait for sidebar to fully load
     await sleep(SIDEBAR_WAIT_MS);
     if (aborted(gen)) { log('warn', 'Scan aborted (gen)'); return; }
@@ -381,6 +403,12 @@
   // Returns: 'replied' | 'skipped' | 'error'
   // ================================================================
   async function processCurrentConversation(state, gen) {
+    // Check if abort was requested from another tab
+    if (await checkServerAbortTime()) {
+      log('warn', 'Process conversation aborted (server abort time detected)');
+      return 'skipped';
+    }
+
     const convId = getConvId();
     if (!convId) { log('error', 'No convId in URL'); return 'error'; }
 
@@ -655,6 +683,12 @@
     log('info', '=== STANDBY — polling "ยังไม่ได้อ่าน" every 45s ===');
     setBadge('standby');
 
+    // Check if abort was requested from another tab
+    if (await checkServerAbortTime()) {
+      log('warn', 'Standby aborted (server abort time detected)');
+      return;
+    }
+
     // Make sure we're on a Messenger page
     const pageType = getPageType();
     if (pageType === 'home') {
@@ -917,11 +951,12 @@
   }
 
   // ================================================================
-  // HASH
+  // HASH — improved deduplication with more text coverage
   // ================================================================
   function msgHash(text) {
     let h = 5381;
-    const s = text.substring(0, 80);
+    // Use up to first 300 chars for better coverage (was 80)
+    const s = text.substring(0, 300);
     for (let i = 0; i < s.length; i++) { h = ((h << 5) + h) ^ s.charCodeAt(i); h |= 0; }
     return (h >>> 0).toString(36);
   }

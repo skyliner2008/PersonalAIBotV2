@@ -4,6 +4,10 @@ import { Type, FunctionDeclaration } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { approvalSystem } from '../../utils/approvalSystem.js';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('os-tool');
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -36,40 +40,38 @@ const DANGEROUS_PATTERNS = [
   /\bpowershell.*-enc\b/i,       // base64 encoded PS
   /\bcurl\s+.*\|\s*(sh|bash|cmd)/i, // curl pipe shell
   /\bchmod\s+777/i,              // world-writable
+
   /\bsudo\b/i,                   // sudo
   /\b(rm|del)\s+.*\\\*/i,        // wildcard delete on root paths
   /shutdown\s+\/[rs]/i,          // shutdown/restart
   /\bregistry\b.*delete/i,       // registry delete
 ];
 
-// Commands ที่อนุญาต (whitelist สำหรับโหมด strict)
-const ALLOWED_COMMANDS_STRICT = new Set([
-  'dir', 'ls', 'pwd', 'echo', 'type', 'cat', 'more',
-  'ipconfig', 'ifconfig', 'ping', 'tracert', 'netstat', 'nslookup',
-  'tasklist', 'ps', 'whoami', 'hostname', 'date', 'time', 'ver',
-  'systeminfo', 'diskpart', 'df', 'du', 'free',
-  'python', 'python3', 'node', 'npm', 'pip',
-  'git', 'curl', 'wget', 'mkdir', 'copy', 'move', 'ren',
-]);
-
-function isSafeCommand(command: string): { safe: boolean; reason?: string } {
-  const cmd = command.trim().toLowerCase();
-
+function isSafeCommand(command: string): { safe: boolean; reason?: string, type?: 'security' | 'compatibility' } {
   // ตรวจ patterns อันตราย
   for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(command)) {
-      return { safe: false, reason: `คำสั่งนี้อาจเป็นอันตราย (ตรงกับ pattern: ${pattern.source})` };
+      return { safe: false, reason: `คำสั่งนี้อาจเป็นอันตราย (ตรงกับ pattern: ${pattern.source})`, type: 'security' };
     }
   }
 
   // ห้ามรัน command ที่มี pipe ไปยัง shell interpreter
   if (/\|\s*(cmd|powershell|bash|sh|zsh)\b/i.test(command)) {
-    return { safe: false, reason: 'ห้าม pipe ไปยัง shell interpreter' };
+    return { safe: false, reason: 'ห้าม pipe ไปยัง shell interpreter', type: 'security' };
   }
 
   // ห้ามใช้ command substitution ที่ซับซ้อน
   if (/`[^`]+`|\$\([^)]+\)/.test(command)) {
-    return { safe: false, reason: 'ห้ามใช้ command substitution' };
+    return { safe: false, reason: 'ห้ามใช้ command substitution', type: 'security' };
+  }
+
+  // ห้ามใช้ Linux tools ที่ไม่มีบน Windows
+  if (/^\s*(grep|ls|cat|rm -rf|pwd)\b/i.test(command)) {
+    return { 
+      safe: false, 
+      reason: `You are on WINDOWS. The Linux command '${command.split(' ')[0]}' does not exist. Use Windows equivalents: findstr/Select-String (for grep), dir (for ls), type (for cat), del (for rm).`,
+      type: 'compatibility'
+    };
   }
 
   return { safe: true };
@@ -80,25 +82,50 @@ function isSafeCommand(command: string): { safe: boolean; reason?: string } {
 // ==========================================
 export const runCommandDeclaration: FunctionDeclaration = {
   name: "run_command",
-  description: "รันคำสั่ง Command Line (CMD/PowerShell) บนระบบปฏิบัติการ Windows คืนค่าผลลัพธ์จาก Terminal. ใช้สำหรับจัดการไฟล์ เช็คสถานะระบบ หรือควบคุม OS ในระดับลึก. ข้อควรระวัง: ห้ามสั่งลบระบบสำคัญเด็ดขาด",
+  description: "รันคำสั่ง Command Line (CMD/PowerShell) บนระบบปฏิบัติการ Windows คืนค่าผลลัพธ์จาก Terminal. ใช้สำหรับจัดการไฟล์ เช็คสถานะระบบ หรือควบคุม OS ในระดับลึก. ข้อควรระวัง: คุณกำลังรันบน Windows! ดังนั้นห้ามใช้ Linux commands เช่น grep, cat, ls, rm (ใช้ findstr, Select-String, type, dir, del แทน)",
   parameters: {
     type: Type.OBJECT,
     properties: {
       command: {
         type: Type.STRING,
-        description: "คำสั่งที่ต้องการรัน (เช่น 'dir', 'ipconfig', 'ping google.com')",
+        description: "คำสั่งที่ต้องการรัน (เช่น 'dir', 'findstr', 'ping google.com')",
       },
     },
     required: ["command"],
   },
 };
 
-export async function runCommand({ command }: { command: string }): Promise<string> {
-  // 🔒 Security check ก่อนรันทุกครั้ง
+export async function runCommand(
+  { command }: { command: string },
+  options?: { chatId?: string }
+): Promise<string> {
+  const chatId = options?.chatId || 'system_fallback';
   const check = isSafeCommand(command);
+
+  // 🔒 Security / Compatibility check ก่อนรันทุกครั้ง
   if (!check.safe) {
-    console.warn(`[Security] Blocked command: "${command}" — ${check.reason}`);
-    return `🚫 คำสั่งถูกบล็อก: ${check.reason}\nคำสั่งที่ปลอดภัย ได้แก่: dir, ping, ipconfig, tasklist, python, git ฯลฯ`;
+    if (check.type === 'compatibility') {
+      return `🚫 OS Compatibility Error: ${check.reason}`;
+    }
+
+    if (chatId.startsWith('admin_')) {
+      console.log(`[Security] Admin override granted for blocked command: "${command}"`);
+    } else {
+      console.warn(`[Security] Suspicious command intercepted: "${command}" — ${check.reason}`);
+      
+      // Request Human-in-the-Loop approval instead of outright blocking it
+      const isApproved = await approvalSystem.requestApproval(
+        chatId, 
+        'run_command', 
+        `AI ต้องการรันคำสั่งที่อาจเป็นอันตราย: \`${command}\`\nเหตุผลที่ดักจับ: ${check.reason}`
+      );
+
+      if (!isApproved) {
+        return `🚫 คำสั่งถูกปฏิเสธโดยมนุษย์ (หรือหมดเวลารออนุมัติ): ${check.reason}`;
+      }
+      
+      console.log(`[Security] Command approved by human: "${command}"`);
+    }
   }
 
   try {
@@ -269,6 +296,13 @@ export const screenshotDesktopDeclaration: FunctionDeclaration = {
 
 export async function screenshotDesktop({ save_path }: { save_path?: string }): Promise<string> {
   const filePath = save_path || path.join(os.homedir(), 'Desktop', `screenshot_${Date.now()}.png`);
+  
+  // Validate filePath to prevent command injection
+  const validPathPattern = /^[a-zA-Z0-9_\-\\/.:\s()]+\.(png|jpg|jpeg|bmp|gif)$/i;
+  if (!validPathPattern.test(filePath)) {
+    return `🚫 พาธไฟล์ไม่ถูกต้อง — ต้องลงท้ายด้วย .png/.jpg/.bmp และห้ามมีอักขระพิเศษ`;
+  }
+
   try {
     const psScript = `
 Add-Type -AssemblyName System.Windows.Forms

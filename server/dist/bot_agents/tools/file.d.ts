@@ -16,3 +16,9 @@ export declare const deleteFileDeclaration: FunctionDeclaration;
 export declare function deleteFile({ file_path }: {
     file_path: string;
 }): Promise<string>;
+export declare const replaceCodeBlockDeclaration: FunctionDeclaration;
+export declare function replaceCodeBlock({ file_path, exact_old_string, new_string }: {
+    file_path: string;
+    exact_old_string: string;
+    new_string: string;
+}): Promise<string>;

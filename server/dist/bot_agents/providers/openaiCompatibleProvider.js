@@ -1,11 +1,14 @@
 import OpenAI from 'openai';
+import { withRetry } from '../../utils/retry.js';
 export class OpenAICompatibleProvider {
     client;
-    constructor(apiKey, baseURL) {
+    providerId;
+    constructor(apiKey, baseURL, providerId) {
         this.client = new OpenAI({
             apiKey,
             baseURL
         });
+        this.providerId = providerId || '';
     }
     async generateResponse(modelName, systemInstruction, contents, tools) {
         const messages = [
@@ -13,7 +16,7 @@ export class OpenAICompatibleProvider {
         ];
         for (const content of contents) {
             const role = content.role === 'model' ? 'assistant' : 'user';
-            const text = content.parts?.map(p => p.text).join('\n') || "";
+            const text = content.parts?.map(p => p.text).join('\n') || '';
             messages.push({ role, content: text });
         }
         const openAiTools = tools?.map(t => ({
@@ -24,59 +27,69 @@ export class OpenAICompatibleProvider {
                 parameters: t.parameters
             }
         }));
-        const response = await this.client.chat.completions.create({
-            model: modelName,
-            messages,
-            tools: openAiTools,
-            tool_choice: openAiTools ? 'auto' : undefined
-        });
-        const choice = response.choices[0];
-        const toolCalls = choice.message.tool_calls?.map((tc) => ({
-            name: tc.function.name,
-            args: JSON.parse(tc.function.arguments)
-        }));
-        return {
-            text: choice.message.content || "",
-            toolCalls,
-            usage: response.usage ? {
-                promptTokens: response.usage.prompt_tokens,
-                completionTokens: response.usage.completion_tokens,
-                totalTokens: response.usage.total_tokens
-            } : undefined
-        };
+        return withRetry(async () => {
+            const response = await this.client.chat.completions.create({
+                model: modelName,
+                messages: messages,
+                tools: openAiTools,
+                tool_choice: openAiTools ? 'auto' : undefined
+            });
+            const choice = response.choices[0];
+            const toolCalls = choice.message.tool_calls
+                ?.filter((tc) => tc.function?.name)
+                .map((tc) => {
+                let args = {};
+                try {
+                    args = JSON.parse(tc.function.arguments);
+                }
+                catch {
+                    // LLM emitted invalid JSON for tool args — fall back to empty object
+                    args = { _raw: tc.function.arguments };
+                }
+                return { name: tc.function.name, args };
+            });
+            return {
+                text: choice.message.content || '',
+                toolCalls,
+                usage: response.usage ? {
+                    promptTokens: response.usage.prompt_tokens,
+                    completionTokens: response.usage.completion_tokens,
+                    totalTokens: response.usage.total_tokens
+                } : undefined
+            };
+        }, { context: `OpenAI:${this.providerId}` });
     }
     async listModels() {
-        const isMiniMax = this.client.baseURL.includes('minimax');
         try {
-            // พยายามดึงจาก API ก่อน
-            const response = await this.client.models.list();
-            return response.data.map(m => m.id);
+            // เรียก GET /models จาก API จริงของ provider (timeout 8 วินาที)
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const response = await this.client.models.list({
+                    signal: controller.signal,
+                });
+                clearTimeout(timeout);
+                const modelIds = response.data.map(m => m.id).filter(Boolean).sort();
+                if (modelIds.length > 0)
+                    return modelIds;
+                throw new Error('Empty model list');
+            }
+            catch (innerErr) {
+                clearTimeout(timeout);
+                throw innerErr;
+            }
         }
         catch (err) {
-            // ถ้าเป็น MiniMax และเจอ 404 ไม่ต้องตกใจ (เป็นเรื่องปกติของเขา) ให้ข้าม Log ไปเลย
-            if (!isMiniMax) {
-                console.warn(`[ListModels] Could not fetch models from provider, using defaults. Error: ${err.message}`);
+            const msg = err instanceof Error ? err.message : String(err);
+            // ไม่ต้อง warn ถ้าเป็น provider ที่รู้ว่าไม่รองรับ /models (เช่น MiniMax, Anthropic)
+            const baseUrl = this.client.baseURL || '';
+            const silentProviders = ['minimax', 'anthropic', 'perplexity'];
+            const isSilent = silentProviders.some(p => baseUrl.includes(p));
+            if (!isSilent) {
+                console.warn(`[ListModels:${this.providerId || 'unknown'}] API call failed: ${msg}`);
             }
-            if (isMiniMax) {
-                // รายชื่อโมเดลล่าสุดของ MiniMax (อัปเดตตามเอกสารต้นปี 2025)
-                return [
-                    "MiniMax-M2.5",
-                    "MiniMax-M2.5-highspeed",
-                    "MiniMax-M2.1",
-                    "MiniMax-M2.1-highspeed",
-                    "abab7-chat-preview",
-                    "abab6.5s-chat",
-                    "abab6.5g-chat",
-                    "abab6.5t-chat"
-                ];
-            }
-            // ถ้าเป็น OpenAI ปกติ
-            return [
-                "gpt-4o",
-                "gpt-4o-mini",
-                "gpt-4-turbo",
-                "gpt-3.5-turbo"
-            ];
+            // Return empty — providerRoutes will merge with registry fallback
+            return [];
         }
     }
 }

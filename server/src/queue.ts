@@ -1,5 +1,6 @@
 import { delay, randomBetween } from './utils.js';
 import { addLog } from './database/db.js';
+import logger from './utils/logger.js';
 
 // ============================================================
 // Message Processing Queue with Auto-Retry
@@ -102,7 +103,7 @@ export class MessageQueue {
                 const jitter = randomBetween(0, 500);
                 const waitMs = backoffMs + jitter;
 
-                console.log(`[Queue] Retry ${item.retries}/${item.maxRetries} for ${item.id} in ${waitMs}ms: ${error.message}`);
+                logger.warn(`Retry ${item.retries}/${item.maxRetries} for ${item.id} in ${waitMs}ms: ${error.message}`);
                 addLog('queue', `Retry ${item.retries}/${item.maxRetries}`, `${item.id}: ${error.message}`, 'warning');
                 this.totalRetries++;
 

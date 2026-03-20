@@ -3,9 +3,12 @@
 // ============================================================
 // The AI records insights from conversations, errors, and self-reflection
 // into categories. These learnings can be retrieved to improve future responses.
+// Learnings are also indexed in VectorStore for semantic search.
 
 import { getDb } from '../database/db.js';
 import { createLogger } from '../utils/logger.js';
+import { getVectorStore, type VectorDocument } from '../memory/vectorStore.js';
+import { embedText } from '../memory/embeddingProvider.js';
 
 const log = createLogger('LearningJournal');
 
@@ -44,10 +47,19 @@ export function addLearning(
         ).get(category, insight);
         if (existing) return;
 
-        db.prepare(
+        const result = db.prepare(
             `INSERT INTO learning_journal (category, insight, source, confidence) VALUES (?, ?, ?, ?)`
         ).run(category, insight, source, confidence);
+
+        const newId = (result as any).lastInsertRowid || Date.now();
         log.info('New learning recorded', { category, insight: insight.substring(0, 80) });
+
+        // Index in vector store asynchronously (non-blocking)
+        setImmediate(() => {
+            indexLearningInVectorStore(newId, insight).catch(err => {
+                log.warn('Async learning indexing failed', { error: String(err) });
+            });
+        });
     } catch (err: any) {
         log.error('Failed to add learning', { error: err.message });
     }
@@ -67,7 +79,8 @@ export function getLearnings(category?: LearningCategory, limit: number = 10): L
         return db.prepare(
             `SELECT * FROM learning_journal ORDER BY confidence DESC, created_at DESC LIMIT ?`
         ).all(limit) as Learning[];
-    } catch {
+    } catch (err) {
+        log.warn('Failed to retrieve learning journal', { error: String(err) });
         return [];
     }
 }
@@ -80,7 +93,7 @@ export function applyLearning(id: number): void {
         getDb().prepare(
             `UPDATE learning_journal SET times_applied = times_applied + 1, confidence = MIN(confidence + 0.05, 1.0) WHERE id = ?`
         ).run(id);
-    } catch { /* silent */ }
+    } catch (err) { log.debug('Failed to apply learning', { id, error: String(err) }); }
 }
 
 /**
@@ -110,7 +123,8 @@ export function getEvolutionLog(limit: number = 20): any[] {
         return getDb().prepare(
             `SELECT * FROM evolution_log ORDER BY created_at DESC LIMIT ?`
         ).all(limit);
-    } catch {
+    } catch (err) {
+        log.warn('Failed to retrieve evolution log', { error: String(err) });
         return [];
     }
 }
@@ -123,4 +137,70 @@ export function buildLearningsContext(): string {
     if (topLearnings.length === 0) return '';
     const items = topLearnings.map(l => `• [${l.category}] ${l.insight}`).join('\n');
     return `\n[Self-Learnings — สิ่งที่เรียนรู้จากประสบการณ์]:\n${items}`;
+}
+
+/**
+ * Search learnings by semantic similarity
+ */
+export async function searchLearnings(query: string, topK: number = 5): Promise<Learning[]> {
+    try {
+        // Try vector store search first
+        try {
+            const vs = await getVectorStore();
+            const embedding = await embedText(query);
+            if (embedding && embedding.length > 0) {
+                const results = await vs.search(embedding, topK, { type: 'learning' });
+                if (results.length > 0) {
+                    const learnings = getLearnings(undefined, 100);
+                    return results
+                        .map(r => {
+                            const id = parseInt(r.id.replace('learning_', ''));
+                            return learnings.find(l => l.id === id);
+                        })
+                        .filter((l): l is Learning => l !== undefined);
+                }
+            }
+        } catch (err) {
+            log.warn('Vector store search for learnings failed, falling back', { error: String(err) });
+        }
+
+        // Fallback: keyword search in all learnings
+        const allLearnings = getLearnings(undefined, 100);
+        const queryLower = query.toLowerCase();
+        return allLearnings
+            .filter(l =>
+                l.insight.toLowerCase().includes(queryLower) ||
+                l.source.toLowerCase().includes(queryLower) ||
+                l.category.toLowerCase().includes(queryLower)
+            )
+            .slice(0, topK);
+    } catch (err) {
+        log.error('Learning search failed', { error: String(err) });
+        return [];
+    }
+}
+
+/**
+ * Index a learning in VectorStore for semantic search (async)
+ */
+async function indexLearningInVectorStore(id: number, insight: string): Promise<void> {
+    try {
+        const embedding = await embedText(insight);
+        if (!embedding || embedding.length === 0) return;
+
+        const vs = await getVectorStore();
+        const doc: VectorDocument = {
+            id: `learning_${id}`,
+            text: insight,
+            embedding,
+            metadata: {
+                chatId: 'system',
+                type: 'learning',
+                createdAt: new Date().toISOString(),
+            },
+        };
+        await vs.upsert(doc);
+    } catch (err) {
+        log.warn('Failed to index learning in vector store', { error: String(err) });
+    }
 }

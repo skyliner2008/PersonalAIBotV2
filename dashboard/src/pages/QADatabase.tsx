@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { Database, Plus, Save, Trash2, Pencil, ToggleLeft, ToggleRight, Search, HelpCircle } from 'lucide-react';
 
@@ -7,8 +7,10 @@ export function QADatabase() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [testQuestion, setTestQuestion] = useState('');
   const [testResult, setTestResult] = useState<any | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const emptyForm = {
     question_pattern: '',
@@ -21,11 +23,23 @@ export function QADatabase() {
 
   useEffect(() => { loadPairs(); }, []);
 
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [search]);
+
   async function loadPairs() {
     try {
       const data = await api.getQAPairs();
       setPairs(data);
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load Q&A pairs:', err);
+    }
   }
 
   function startEdit(qa: any) {
@@ -49,7 +63,9 @@ export function QADatabase() {
       setShowForm(false);
       setEditing(null);
       loadPairs();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to save Q&A pair:', err);
+    }
   }
 
   async function handleDelete(id: number) {
@@ -57,14 +73,18 @@ export function QADatabase() {
     try {
       await api.deleteQAPair(id);
       loadPairs();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to delete Q&A pair:', err);
+    }
   }
 
   async function handleToggle(id: number, current: boolean) {
     try {
       await api.updateQAPair(id, { is_active: !current });
       loadPairs();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to toggle Q&A pair:', err);
+    }
   }
 
   async function handleTest() {
@@ -72,16 +92,17 @@ export function QADatabase() {
     try {
       const result = await api.testQA(testQuestion);
       setTestResult(result);
-    } catch {
+    } catch (err) {
+      console.error('Failed to test Q&A:', err);
       setTestResult({ match: false });
     }
   }
 
   const filtered = pairs.filter(qa =>
-    !search ||
-    qa.question_pattern.toLowerCase().includes(search.toLowerCase()) ||
-    qa.answer.toLowerCase().includes(search.toLowerCase()) ||
-    qa.category?.toLowerCase().includes(search.toLowerCase())
+    !debouncedSearch ||
+    qa.question_pattern.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+    qa.answer.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+    qa.category?.toLowerCase().includes(debouncedSearch.toLowerCase())
   );
 
   const matchTypeLabels: Record<string, { label: string; color: string }> = {

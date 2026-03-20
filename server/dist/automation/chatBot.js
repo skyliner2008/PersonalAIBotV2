@@ -1,9 +1,12 @@
-import { newPage, humanDelay, isRunning } from './browser.js';
-import { addLog, getDefaultPersona, upsertConversation, addMessage, getConversationMessages, findQAMatch } from '../database/db.js';
+import { newPage, humanDelay, isRunning, navigateWithRetry } from './browser.js';
+import { addLog, getDefaultPersona, upsertConversation, addMessage, getConversationMessages } from '../database/db.js';
 import { aiChat } from '../ai/aiRouter.js';
 import { buildChatMessagesLegacy as buildChatMessages } from '../ai/prompts/chatPersona.js';
 import { config } from '../config.js';
 import { stripThinkTags } from '../utils.js';
+import { getChatReplyDelayMs } from '../config/runtimeSettings.js';
+import { createLogger } from '../utils/logger.js'; // Added import
+const logger = createLogger('ChatBot'); // Added logger instance
 let chatPage = null;
 let isMonitoring = false;
 let pollInterval = null;
@@ -19,9 +22,10 @@ function isPageAlive() {
     try {
         return !!chatPage && !chatPage.isClosed() && isRunning();
     }
-    catch {
+    catch (e) {
+        logger.debug('page check: ' + String(e));
         return false;
-    }
+    } // Modified
 }
 function forceStop(io) {
     isMonitoring = false;
@@ -53,18 +57,18 @@ export async function startChatMonitor(io) {
     try {
         // Open a dedicated page for Messenger
         chatPage = await newPage();
-        await chatPage.goto(MESSENGER_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await navigateWithRetry(chatPage, MESSENGER_URL);
         await humanDelay(3000, 5000);
-        addLog('chatbot', 'Chat monitor started', null, 'success');
-        console.log('[ChatBot] Started — monitoring Messenger');
+        addLog('chatbot', 'Chat monitor started', undefined, 'success');
+        logger.info('Started — monitoring Messenger'); // Modified
         io.emit('chatbot:status', { active: true });
         // Main poll loop
         pollInterval = setInterval(async () => {
             if (!isMonitoring)
                 return;
             if (!isPageAlive()) {
-                console.log('[ChatBot] Page/browser gone, auto-stopping');
-                addLog('chatbot', 'Auto-stopped (browser closed)', null, 'warning');
+                logger.warn('Page/browser gone, auto-stopping'); // Modified
+                addLog('chatbot', 'Auto-stopped (browser closed)', undefined, 'warning');
                 forceStop(io);
                 return;
             }
@@ -81,7 +85,7 @@ export async function startChatMonitor(io) {
                 consecutiveErrors++;
                 if (consecutiveErrors <= MAX_CONSECUTIVE_ERRORS) {
                     addLog('chatbot', 'Poll error', msg, 'warning');
-                    console.error(`[ChatBot] Poll error (${consecutiveErrors}):`, msg);
+                    logger.error(`Poll error (${consecutiveErrors}): ${msg}`); // Modified
                 }
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                     addLog('chatbot', 'Auto-stopped (repeated errors)', msg, 'error');
@@ -107,39 +111,30 @@ export function stopChatMonitor(io) {
             if (!chatPage.isClosed())
                 chatPage.close().catch(() => { });
         }
-        catch { }
+        catch (e) {
+            logger.debug('page close: ' + String(e));
+        } // Modified
     }
     chatPage = null;
-    addLog('chatbot', 'Chat monitor stopped', null, 'info');
-    console.log('[ChatBot] Stopped');
+    addLog('chatbot', 'Chat monitor stopped', undefined, 'info');
+    logger.info('Stopped'); // Modified
     io.emit('chatbot:status', { active: false });
 }
 export function isChatMonitorActive() {
     return isMonitoring;
 }
-// ============================================================
-// Core logic: poll the conversation list for unread badges
-// ============================================================
-async function pollUnreadConversations(io) {
-    if (!isPageAlive())
-        return;
-    const page = chatPage;
-    // Make sure we're on the Messenger inbox (conversation list)
+async function ensureOnMessengerInbox(page) {
     const currentUrl = page.url();
     if (!currentUrl.includes('/messages')) {
-        console.log('[ChatBot] Not on Messenger, navigating back...');
-        await page.goto(MESSENGER_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        logger.warn('Not on Messenger, navigating back...');
+        await navigateWithRetry(page, MESSENGER_URL);
         await humanDelay(2000, 3000);
     }
-    // ---- Step 1: Find conversation items that have unread indicators ----
-    // Messenger shows unread threads with a bold title or a blue dot.
-    // We look for conversation links in the sidebar.
+}
+async function getUnreadConversations(page) {
     const convLinks = await page.$$('a[href*="/messages/t/"]');
-    if (convLinks.length === 0) {
-        // Try alternate: Messenger might use different structure
-        return;
-    }
-    // Collect conversations with unread messages
+    if (convLinks.length === 0)
+        return [];
     const unreadConvs = [];
     for (const link of convLinks) {
         try {
@@ -149,64 +144,68 @@ async function pollUnreadConversations(io) {
             const userId = extractUserId(href);
             if (!userId)
                 continue;
-            // Check if this conversation has unread indicator
-            // Facebook marks unread with aria/bold/dot — look for visual cues
-            const parentLi = await link.evaluateHandle(el => el.closest('[role="row"], [role="listitem"], li'));
+            const parentLi = await link.evaluateHandle((el) => el.closest('[role="row"], [role="listitem"], li'));
+            if (!parentLi)
+                continue;
             const parentEl = parentLi.asElement();
             let hasUnread = false;
             if (parentEl) {
-                // Method 1: check for "unread" in aria-label
                 const ariaLabel = await parentEl.getAttribute('aria-label') || '';
                 if (ariaLabel.toLowerCase().includes('unread') || ariaLabel.includes('ยังไม่ได้อ่าน')) {
                     hasUnread = true;
                 }
-                // Method 2: check for bold text (unread conversations have bold title)
                 if (!hasUnread) {
                     const boldEl = await parentEl.$('span[style*="font-weight"], strong, span[class*="bold"]');
                     if (boldEl)
                         hasUnread = true;
                 }
             }
-            // Also check: have we already replied to the latest message in this conv?
-            // If yes, skip it
             if (!hasUnread && lastRepliedMessageId.has(userId))
                 continue;
-            // Get user name from the link
             let name = 'Unknown';
             try {
                 const nameEl = await link.$('span');
                 if (nameEl)
                     name = (await nameEl.textContent())?.trim() || 'Unknown';
             }
-            catch { }
+            catch (e) {
+                logger.debug('name extraction: ' + String(e));
+            }
             if (hasUnread) {
-                unreadConvs.push({ userId, url: `https://www.facebook.com${href}`, name, element: link });
+                unreadConvs.push({ userId, url: `https://www.facebook.com${href}`, name });
             }
         }
-        catch {
+        catch (e) {
+            logger.debug('conversation item: ' + String(e));
             continue;
         }
     }
+    return unreadConvs;
+}
+async function pollUnreadConversations(io) {
+    if (!isPageAlive())
+        return;
+    const page = chatPage;
+    await ensureOnMessengerInbox(page);
+    const unreadConvs = await getUnreadConversations(page);
     if (unreadConvs.length === 0)
         return;
-    console.log(`[ChatBot] Found ${unreadConvs.length} unread conversation(s)`);
-    // ---- Step 2: Process each unread conversation ----
+    logger.info(`Found ${unreadConvs.length} unread conversation(s)`);
     for (const conv of unreadConvs) {
         if (!isPageAlive() || !isMonitoring)
             return;
         try {
             await processConversation(page, conv.userId, conv.url, conv.name, io);
-            // Go back to inbox for next conversation
             if (!isPageAlive())
                 return;
-            await page.goto(MESSENGER_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await navigateWithRetry(page, MESSENGER_URL);
             await humanDelay(2000, 3000);
         }
         catch (e) {
             const msg = e?.message || String(e);
             if (isClosedError(msg))
                 return;
-            console.error(`[ChatBot] Error processing conv ${conv.userId}:`, msg);
+            logger.error(`Error processing conv ${conv.userId}: ${msg}`);
             addLog('chatbot', `Error processing ${conv.name}`, msg, 'error');
         }
     }
@@ -215,10 +214,10 @@ async function pollUnreadConversations(io) {
 // Process a single conversation
 // ============================================================
 async function processConversation(page, userId, convUrl, userName, io) {
-    console.log(`[ChatBot] Opening conversation: ${userName} (${userId})`);
+    logger.info(`Opening conversation: ${userName} (${userId})`); // Modified
     addLog('chatbot', `Processing chat: ${userName}`, userId, 'info');
     // Navigate directly to this conversation by URL
-    await page.goto(convUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await navigateWithRetry(page, convUrl);
     await humanDelay(2000, 3000);
     if (!isPageAlive())
         return;
@@ -226,7 +225,7 @@ async function processConversation(page, userId, convUrl, userName, io) {
     const currentUrl = page.url();
     const currentUserId = extractUserId(currentUrl);
     if (currentUserId !== userId) {
-        console.warn(`[ChatBot] URL mismatch! Expected ${userId}, got ${currentUserId}`);
+        logger.warn(`URL mismatch! Expected ${userId}, got ${currentUserId}`); // Modified
         return;
     }
     // Save conversation in DB
@@ -237,16 +236,16 @@ async function processConversation(page, userId, convUrl, userName, io) {
     // We need the LAST message from the OTHER person (not us).
     const lastIncoming = await getLastIncomingMessage(page);
     if (!lastIncoming) {
-        console.log(`[ChatBot] No incoming message found for ${userName}`);
+        logger.info(`No incoming message found for ${userName}`); // Modified
         return;
     }
     // Check if we already replied to this exact message
     const prevReplied = lastRepliedMessageId.get(userId);
     if (prevReplied === lastIncoming.id) {
-        console.log(`[ChatBot] Already replied to latest message from ${userName}, skipping`);
+        logger.info(`Already replied to latest message from ${userName}, skipping`); // Modified
         return;
     }
-    console.log(`[ChatBot] New message from ${userName}: "${lastIncoming.text.substring(0, 60)}..."`);
+    logger.info(`New message from ${userName}: "${lastIncoming.text.substring(0, 60)}..."`); // Modified
     // Store the incoming message
     addMessage(userId, 'user', lastIncoming.text, lastIncoming.id);
     // Notify dashboard
@@ -259,7 +258,7 @@ async function processConversation(page, userId, convUrl, userName, io) {
     // ---- Generate reply ----
     const reply = await generateReply(userId, userName, lastIncoming.text);
     if (!reply) {
-        console.log(`[ChatBot] No reply generated for ${userName}`);
+        logger.info(`No reply generated for ${userName}`); // Modified
         return;
     }
     // ---- Send reply ----
@@ -268,17 +267,19 @@ async function processConversation(page, userId, convUrl, userName, io) {
     // Verify we're still on the right conversation
     const checkUrl = page.url();
     if (!checkUrl.includes(userId)) {
-        console.warn(`[ChatBot] URL changed during reply generation! Aborting reply.`);
+        logger.warn(`URL changed during reply generation! Aborting reply.`); // Modified
         return;
     }
     // Simulate thinking time
-    const thinkTime = Math.max(config.minReplyDelay, Math.min(reply.length * 40, config.maxReplyDelay));
+    const minReplyDelay = getChatReplyDelayMs();
+    const maxReplyDelay = Math.max(minReplyDelay, config.maxReplyDelay);
+    const thinkTime = Math.max(minReplyDelay, Math.min(reply.length * 40, maxReplyDelay));
     await humanDelay(thinkTime * 0.8, thinkTime * 1.2);
     if (!isPageAlive() || !page.url().includes(userId))
         return;
     const sent = await typeAndSendReply(page, reply);
     if (!sent) {
-        addLog('chatbot', `Failed to send reply to ${userName}`, null, 'error');
+        addLog('chatbot', `Failed to send reply to ${userName}`, undefined, 'error');
         return;
     }
     // Mark as replied
@@ -292,7 +293,7 @@ async function processConversation(page, userId, convUrl, userName, io) {
         timestamp: new Date().toISOString(),
     });
     addLog('chatbot', `Replied to ${userName}`, `"${lastIncoming.text.substring(0, 40)}..." → "${reply.substring(0, 40)}..."`, 'success');
-    console.log(`[ChatBot] Replied to ${userName}: "${reply.substring(0, 60)}..."`);
+    logger.info(`Replied to ${userName}: "${reply.substring(0, 60)}..."`); // Modified
 }
 // ============================================================
 // Read the last INCOMING message (from the other person, NOT us)
@@ -301,151 +302,81 @@ async function getLastIncomingMessage(page) {
     try {
         // In Messenger, messages are in rows.
         // OUR messages are on the RIGHT side, OTHER person's on the LEFT.
-        // We need to find the last message that is NOT ours.
-        // Strategy: get all message groups/rows, check their alignment or aria attributes
-        // Facebook uses different structures, so we try multiple approaches.
-        // Approach 1: Look for message rows and check if they're incoming
-        // Incoming messages typically don't have a specific "you sent" indicator
-        const allMessages = await page.$$('[role="row"]');
-        if (allMessages.length === 0) {
-            // Approach 2: Try generic message containers
-            const msgContainers = await page.$$('div[dir="auto"]');
-            if (msgContainers.length === 0)
-                return null;
-            const lastEl = msgContainers[msgContainers.length - 1];
-            const text = (await lastEl.textContent())?.trim();
-            if (!text)
-                return null;
-            return { id: hashMessage(text), text };
-        }
-        // Walk from the LAST message backwards to find the last INCOMING one
-        for (let i = allMessages.length - 1; i >= 0 && i >= allMessages.length - 20; i--) {
-            const row = allMessages[i];
-            // Get text content of this row
-            const textEls = await row.$$('div[dir="auto"]');
-            let text = '';
-            for (const el of textEls) {
-                const t = await el.textContent();
-                if (t) {
-                    text = t.trim();
-                    break;
-                }
-            }
-            if (!text)
-                continue;
-            // Determine if this is incoming or outgoing.
-            // Facebook often puts outgoing messages in a colored bubble (blue) on the right
-            // and incoming in gray on the left.
-            // We can check: does this row have a colored (blue) background? → outgoing
-            // Or check aria-label for "You sent" / "คุณส่ง"
-            const rowHtml = await row.evaluate(el => el.outerHTML.substring(0, 500));
-            // Method 1: check aria labels
-            const ariaLabel = await row.getAttribute('aria-label') || '';
-            const isOutgoing = ariaLabel.includes('You sent') ||
-                ariaLabel.includes('คุณส่ง') ||
-                ariaLabel.includes('You wrote');
-            // Method 2: check for the "tail" indicator or specific styling of sent messages
-            if (!isOutgoing) {
-                // Check if there's an avatar image on the LEFT (= incoming from other person)
-                const avatar = await row.$('img[alt]:not([alt=""])');
-                // If this message has an avatar → it's from the other person
-                // (Facebook shows avatar next to other person's messages)
-                if (avatar || !ariaLabel.includes('You')) {
-                    return { id: hashMessage(text), text };
+        // We need to find
+        const messageBubbles = await page.$$('[role="row"] [data-testid="message-bubble"]');
+        let lastIncomingMessage = null;
+        for (const bubble of messageBubbles) {
+            const isOurMessage = await bubble.evaluate(el => {
+                // Check for specific styling or attributes that indicate our messages
+                // This might need adjustment based on current Messenger HTML
+                const style = window.getComputedStyle(el);
+                return style.alignSelf === 'flex-end' || style.backgroundColor === 'rgb(0, 132, 255)'; // Example: blue background for our messages
+            });
+            if (!isOurMessage) {
+                // This is an incoming message
+                const textElement = await bubble.$('span[dir="auto"]');
+                const messageText = (await textElement?.textContent())?.trim();
+                const messageId = await bubble.getAttribute('id'); // Messenger message IDs are usually on the bubble element
+                if (messageText && messageId) {
+                    lastIncomingMessage = { id: messageId, text: messageText };
                 }
             }
         }
-        // Fallback: just return the very last message text (risky, might be ours)
-        // But mark it so we can track
-        return null;
+        return lastIncomingMessage;
     }
     catch (e) {
-        console.error('[ChatBot] Error reading messages:', e);
+        logger.error('Error getting last incoming message: ' + String(e)); // Modified
         return null;
     }
 }
-/**
- * Create a deterministic hash for a message to track if we've seen it
- */
-function hashMessage(text) {
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) {
-        const chr = text.charCodeAt(i);
-        hash = ((hash << 5) - hash) + chr;
-        hash |= 0;
-    }
-    return `msg_${Math.abs(hash).toString(36)}`;
-}
 // ============================================================
-// Type and send a reply in the current conversation
+// Type and send reply
 // ============================================================
-async function typeAndSendReply(page, text) {
-    // Find the message input box
-    const inputSelectors = [
-        '[aria-label="ข้อความ"]',
-        '[aria-label="Message"]',
-        '[aria-label="Aa"]',
-        'div[role="textbox"][contenteditable="true"]',
-        'p[contenteditable="true"]',
-    ];
-    for (const sel of inputSelectors) {
-        try {
-            const input = await page.$(sel);
-            if (!input || !(await input.isVisible()))
-                continue;
-            // Focus the input
-            await input.click();
-            await humanDelay(300, 600);
-            // Type the reply (in small chunks for natural feel)
-            const chunks = text.match(/.{1,25}/gs) || [text];
-            for (const chunk of chunks) {
-                await page.keyboard.type(chunk, { delay: 25 });
-                await humanDelay(50, 150);
-            }
-            await humanDelay(500, 1000);
-            // Press Enter to send
-            await page.keyboard.press('Enter');
-            await humanDelay(1000, 2000);
-            console.log('[ChatBot] Message sent successfully');
-            return true;
-        }
-        catch {
-            continue;
-        }
-    }
-    console.error('[ChatBot] Could not find message input');
-    return false;
-}
-// ============================================================
-// Generate AI reply (Q&A first, then AI)
-// ============================================================
-async function generateReply(convId, userName, message) {
-    // 1. Q&A database check first
-    const qaMatch = findQAMatch(message);
-    if (qaMatch) {
-        addLog('chatbot', 'Q&A match', `"${qaMatch.question_pattern}" → using preset answer`, 'info');
-        return qaMatch.answer;
-    }
-    // 2. Get conversation history for context
-    const history = getConversationMessages(convId, 20);
-    const persona = getDefaultPersona();
-    if (!persona) {
-        addLog('chatbot', 'No persona configured', null, 'warning');
-        return null;
-    }
-    // 3. Build prompt with persona + history + new message
-    const messages = buildChatMessages(persona, history.map((m) => ({ role: m.role, content: m.content })), message);
-    // 4. Call AI
+async function typeAndSendReply(page, reply) {
     try {
-        const aiResult = await aiChat('chat', messages, {
-            temperature: persona.temperature || 0.7,
-            maxTokens: persona.max_tokens || 500,
-        });
-        let reply = stripThinkTags(aiResult.text || '');
-        return reply || null;
+        // Find the message input field
+        const inputSelector = '[contenteditable="true"][role="textbox"]';
+        await page.waitForSelector(inputSelector, { state: 'visible' });
+        const inputField = await page.$(inputSelector);
+        if (!inputField) {
+            logger.error('Message input field not found.'); // Modified
+            return false;
+        }
+        // Type the reply
+        await inputField.type(reply, { delay: 10 });
+        // Press Enter to send the message
+        await page.keyboard.press('Enter');
+        logger.info('Reply sent successfully.'); // Modified
+        return true;
     }
     catch (e) {
-        addLog('chatbot', 'AI error', String(e), 'error');
+        logger.error('Error typing and sending reply: ' + String(e)); // Modified
+        return false;
+    }
+}
+// ============================================================
+// Generate reply using AI
+// ============================================================
+async function generateReply(userId, userName, lastMessage) {
+    try {
+        // Get conversation history from DB
+        const messages = await getConversationMessages(userId);
+        const defaultPersona = await getDefaultPersona();
+        // Prepare messages for AI
+        const fallbackPersona = {
+            system_prompt: defaultPersona?.systemInstruction || '',
+            personality_traits: '[]'
+        };
+        const chatMessages = buildChatMessages(fallbackPersona, messages, lastMessage);
+        // Call AI
+        const aiResponse = await aiChat('chat', chatMessages);
+        if (!aiResponse || typeof aiResponse.text !== 'string')
+            return null;
+        // Strip any <think> tags from the AI response
+        return stripThinkTags(aiResponse.text);
+    }
+    catch (e) {
+        logger.error('Error generating AI reply: ' + String(e)); // Modified
         return null;
     }
 }

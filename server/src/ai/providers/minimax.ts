@@ -1,5 +1,6 @@
 import type { AIProvider, AIMessage, AICompletionOptions, AIChatResponse } from '../types.js';
 import { getSetting } from '../../database/db.js';
+import { getProviderApiKey } from '../../config/settingsSecurity.js';
 
 const BASE_URL = 'https://api.minimaxi.chat/v1';
 
@@ -8,7 +9,7 @@ export class MiniMaxProvider implements AIProvider {
   name = 'MiniMax';
 
   private getKey(): string {
-    return getSetting('ai_minimax_key') || '';
+    return getProviderApiKey('minimax') || '';
   }
   private getModel(): string {
     return getSetting('ai_minimax_model') || 'MiniMax-M2.5';
@@ -58,7 +59,7 @@ export class MiniMaxProvider implements AIProvider {
         }),
       });
       return res.ok;
-    } catch { return false; }
+    } catch (e) { console.debug('[Minimax] API validation failed:', String(e)); return false; }
   }
 
   async listModels(): Promise<string[]> {

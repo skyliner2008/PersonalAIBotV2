@@ -1,36 +1,96 @@
 import { GoogleGenAI, Content, FunctionDeclaration } from '@google/genai';
 import type { AIProvider, AIResponse } from './baseProvider.js';
 import type { ToolCall } from '../types.js';
+import { withRetry } from '../../utils/retry.js';
+import { createLogger } from '../../utils/logger.js';
 
-// Exponential backoff retry utility
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1000): Promise<T> {
-  let lastError: any;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastError = err;
-      const msg = err?.message?.toLowerCase() || '';
-      // Non-retryable errors
-      if (msg.includes('api key') || msg.includes('permission') || msg.includes('invalid argument')
-          || msg.includes('safety') || msg.includes('blocked')) {
-        throw err;
-      }
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 500; // jitter
-        console.warn(`[GeminiProvider] Attempt ${attempt} failed, retrying in ${Math.round(delay)}ms... (${err.message})`);
-        await new Promise(r => setTimeout(r, delay));
-      }
-    }
+const logger = createLogger('GeminiProvider');
+
+interface GeminiProviderOptions {
+  includeEmbeddingsInList?: boolean;
+  includeTTSInList?: boolean;
+  includeAqaInList?: boolean;
+  providerId?: string;
+  /** If true, use Vertex AI mode (OAuth Bearer token instead of API key) */
+  vertexai?: boolean;
+  /** Google Cloud project ID (for Vertex AI) */
+  project?: string;
+  /** Google Cloud location (for Vertex AI) */
+  location?: string;
+}
+
+/** API versions to try, in order. v1beta is default but some newer models only work on v1. */
+const API_VERSIONS = ['v1beta', 'v1'] as const;
+
+/**
+ * Alias map for common short names → actual API model names.
+ * Users may configure "gemini-3.1-pro" in settings but the API
+ * requires "gemini-3.1-pro-preview" (preview suffix).
+ */
+const MODEL_ALIAS_MAP: Record<string, string> = {
+  'gemini-3.1-pro': 'gemini-3.1-pro-preview',
+  'gemini-3.1-flash': 'gemini-3.1-flash-lite-preview',
+  'gemini-3-pro': 'gemini-3-pro-preview',
+  'gemini-3-flash': 'gemini-3-flash-preview',
+  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
+  'gemini-2.0-flash': 'gemini-2.0-flash',
+  'gemini-1.5-flash': 'gemini-2.0-flash',
+  'gemini-1.5-pro': 'gemini-2.5-pro',
+};
+
+/** Resolve a model name — expand short aliases to full API names. */
+function resolveModelName(model: string): string {
+  const alias = MODEL_ALIAS_MAP[model];
+  if (alias) {
+    logger.info(`Resolving model alias "${model}" → "${alias}"`);
   }
-  throw lastError;
+  return alias || model;
 }
 
 export class GeminiProvider implements AIProvider {
   private ai: GoogleGenAI;
+  /** Secondary client with fallback API version (lazily created) */
+  private aiFallback: GoogleGenAI | null = null;
+  private apiKey: string;
+  private options: GeminiProviderOptions;
+  /** Cache of models that need v1 API version */
+  private v1Models = new Set<string>();
+  private isVertexAI: boolean;
 
-  constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey: string, options: GeminiProviderOptions = {}) {
+    this.apiKey = apiKey;
+    this.options = options;
+    this.isVertexAI = !!options.vertexai;
+
+    if (this.isVertexAI) {
+      // Vertex AI mode: use OAuth token via httpOptions headers
+      this.ai = new GoogleGenAI({
+        vertexai: true,
+        project: options.project || '',
+        location: options.location || 'us-central1',
+        googleAuthOptions: {
+          credentials: { client_email: '', private_key: '' },
+          // Override with access token
+        } as any,
+        httpOptions: {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        },
+      });
+    } else {
+      this.ai = new GoogleGenAI({ apiKey });
+    }
+  }
+
+  /** Get the appropriate client for a model (v1beta or v1) */
+  private getClientForModel(modelName: string): GoogleGenAI {
+    if (this.isVertexAI) return this.ai; // Vertex AI handles versioning internally
+    if (this.v1Models.has(modelName)) {
+      if (!this.aiFallback) {
+        this.aiFallback = new GoogleGenAI({ apiKey: this.apiKey, httpOptions: { apiVersion: 'v1' } });
+      }
+      return this.aiFallback;
+    }
+    return this.ai;
   }
 
   async generateResponse(
@@ -40,13 +100,15 @@ export class GeminiProvider implements AIProvider {
     tools?: FunctionDeclaration[],
     useGoogleSearch?: boolean
   ): Promise<AIResponse> {
+    // Resolve model name upfront (map invalid names to valid fallbacks)
+    modelName = resolveModelName(modelName);
+
     return withRetry(async () => {
       // Build tools config
       // IMPORTANT: Gemini API does NOT allow combining built-in tools (googleSearch)
       // with custom tools (Function Calling) in the same request.
       // When function calling tools exist → use them (web_search/read_webpage handle search)
       // When no function calling tools → use Google Search grounding
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toolsConfig: any[] = [];
       if (tools && tools.length > 0) {
         toolsConfig.push({ functionDeclarations: tools });
@@ -55,19 +117,96 @@ export class GeminiProvider implements AIProvider {
         toolsConfig.push({ googleSearch: {} });
       }
 
-      const response = await this.ai.models.generateContent({
+      const requestPayload = {
         model: modelName,
         contents,
         config: {
           systemInstruction,
           tools: toolsConfig.length > 0 ? toolsConfig : undefined,
           temperature: 0.7,
-          maxOutputTokens: 16384,  // เพิ่มจาก 8192 → รองรับคำตอบที่ยาวขึ้น
+          maxOutputTokens: 16384,
         }
-      });
+      };
+
+      let client = this.getClientForModel(modelName);
+      let response: any;
+      try {
+        response = await client.models.generateContent(requestPayload);
+      } catch (genErr: any) {
+        const errMsg = JSON.stringify(genErr?.message || genErr || '');
+        const isModelNotFound = /404|NOT_FOUND|is not found/i.test(errMsg);
+        const isInvalidArgs = /INVALID_ARGUMENT|Unknown name/i.test(errMsg);
+        
+        // If model not found or invalid args on current API version, try alternative version
+        if ((isModelNotFound || isInvalidArgs) && !this.v1Models.has(modelName)) {
+          logger.warn(`Model "${modelName}" ${isModelNotFound ? 'not found' : 'invalid args'} on v1beta, retrying with v1 API version...`);
+          this.v1Models.add(modelName);
+          if (!this.aiFallback) {
+            this.aiFallback = new GoogleGenAI({ apiKey: this.apiKey, httpOptions: { apiVersion: 'v1' } });
+          }
+          
+          // CRITICAL: For v1, strip systemInstruction and tools if WE DETECTED INVALID_ARGUMENT
+          // OR if we suspect this model is in the restricted list for v1.
+          const v1Payload = {
+            ...requestPayload,
+            config: {
+              ...requestPayload.config,
+              systemInstruction: undefined, // Standardize on stripping for v1 retry
+              tools: undefined,
+            },
+            contents: systemInstruction
+              ? [{ role: 'user' as const, parts: [{ text: `[System Instruction]\n${systemInstruction}` }] }, ...contents]
+              : contents,
+          };
+          
+          try {
+            response = await this.aiFallback.models.generateContent(v1Payload);
+          } catch (v1Err: any) {
+            // If v1 STILL fails with INVALID_ARGUMENT, it might be due to remaining fields
+            logger.error(`v1 retry also failed for ${modelName}:`, v1Err);
+            throw v1Err;
+          }
+        } else {
+          throw genErr;
+        }
+      }
+
+      const candidateParts: any[] = (response.candidates?.[0] as any)?.content?.parts || [];
+      const textParts = candidateParts
+        .map((part: any) => String(part?.text || '').trim())
+        .filter(Boolean);
+
+      // Avoid response.text getter warning when model returns functionCall-only parts.
+      let responseText = textParts.join('\n').trim();
+
+      const functionCallsFromParts: ToolCall[] = candidateParts
+        .map((part: any) => part?.functionCall)
+        .filter((fc: any) => fc?.name)
+        .map((fc: any) => ({
+          name: String(fc.name),
+          args: (fc.args ?? {}) as Record<string, unknown>,
+        }));
+
+      const functionCallsFromApi: ToolCall[] = (response.functionCalls || [])
+        .filter((fc: any) => fc.name != null)
+        .map((fc: any) => ({
+          name: fc.name as string,
+          args: (fc.args ?? {}) as Record<string, unknown>,
+        }));
+
+      const toolCallByKey = new Map<string, ToolCall>();
+      for (const call of [...functionCallsFromApi, ...functionCallsFromParts]) {
+        const key = `${call.name}:${JSON.stringify(call.args || {})}`;
+        if (!toolCallByKey.has(key)) toolCallByKey.set(key, call);
+      }
+      const mergedToolCalls = Array.from(toolCallByKey.values());
+
+      // Fallback to response.text only when there are no tool calls.
+      if (!responseText && mergedToolCalls.length === 0) {
+        responseText = response.text || '';
+      }
 
       // Extract grounding metadata (Google Search citations)
-      let responseText = response.text || '';
       const grounding = (response.candidates?.[0] as any)?.groundingMetadata;
       if (grounding?.searchEntryPoint?.renderedContent) {
         // Append search sources summary
@@ -83,10 +222,9 @@ export class GeminiProvider implements AIProvider {
         }
       }
 
-      // Map FunctionCall[] → ToolCall[] (filter out calls with undefined names)
-      const toolCalls: ToolCall[] | undefined = response.functionCalls
-        ?.filter((fc) => fc.name != null)
-        .map((fc) => ({ name: fc.name as string, args: (fc.args ?? {}) as Record<string, unknown> }));
+      const toolCalls: ToolCall[] | undefined = mergedToolCalls.length > 0
+        ? mergedToolCalls
+        : undefined;
 
       return {
         text: responseText,
@@ -98,19 +236,80 @@ export class GeminiProvider implements AIProvider {
           totalTokens: response.usageMetadata.totalTokenCount || 0
         } : undefined
       };
-    });
+    }, { context: 'Gemini' });
   }
 
   async listModels(): Promise<string[]> {
     try {
-      const result = await this.ai.models.list();
-      return ((result as any).pageInternal || [])
-        .filter((m: any) => m.supportedActions?.includes('generateContent'))
-        .map((m: any) => m.name.replace('models/', ''))
-        .sort();
+      const allModels: string[] = [];
+      const includeEmbeddings = this.options.includeEmbeddingsInList === true;
+      const includeTTS = this.options.includeTTSInList === true;
+      const includeAqa = this.options.includeAqaInList === true;
+
+      const pager: any = await this.ai.models.list();
+      let guard = 0;
+
+      while (pager && guard < 20) {
+        guard += 1;
+        const page = pager.page || pager.pageInternal || [];
+        for (const m of page) {
+          const name: string = (m.name || '').replace('models/', '').trim();
+          if (!name) continue;
+
+          if (!includeEmbeddings && name.includes('embedding')) continue;
+          if (!includeTTS && name.includes('tts')) continue;
+          if (!includeAqa && name.includes('aqa')) continue;
+
+          allModels.push(name);
+        }
+
+        const hasNext =
+          typeof pager.hasNextPage === 'function'
+            ? pager.hasNextPage()
+            : Boolean(pager.nextPageToken);
+
+        if (!hasNext || typeof pager.nextPage !== 'function') {
+          break;
+        }
+
+        try {
+          // NOTE: in @google/genai Pager, nextPage mutates the pager state
+          // and returns the next page array, not a new pager instance.
+          await pager.nextPage();
+        } catch (pageErr: any) {
+          const msg = String(pageErr?.message || pageErr || '');
+          if (msg.includes('No more pages to fetch')) {
+            break;
+          }
+          throw pageErr;
+        }
+      }
+
+      const uniqueSorted = Array.from(new Set(allModels)).sort();
+      if (uniqueSorted.length > 0) {
+        return uniqueSorted;
+      }
+
+      throw new Error('No models returned from API');
     } catch (err) {
       console.error('[Gemini ListModels Error]:', err);
-      return ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-pro', 'gemini-1.5-flash'];
+      if (this.options.includeEmbeddingsInList) {
+        return [
+          'gemini-embedding-001',
+          'text-embedding-004',
+          'gemini-embedding-002',
+        ];
+      }
+      // Fallback list for LLM mode if the API call entirely fails
+      return [
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.0-pro-exp-02-05',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-pro',
+        'gemini-1.5-flash'
+      ];
     }
   }
 }

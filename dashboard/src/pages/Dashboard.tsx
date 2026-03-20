@@ -8,18 +8,73 @@ interface Props {
   on: (event: string, handler: (...args: any[]) => void) => () => void;
 }
 
+type RuntimeStatus = 'active' | 'degraded' | 'offline';
+
+interface TopologyAgent {
+  id: string;
+  name: string;
+  kind: string;
+  status: RuntimeStatus;
+  channels: string[];
+  summonTargets: string[];
+  details?: Record<string, unknown>;
+}
+
+interface TopologyPlugin {
+  id: string;
+  name: string;
+  status: RuntimeStatus;
+  details: Record<string, unknown>;
+}
+
+interface SystemTopology {
+  generatedAt: string;
+  architecture: {
+    mode: string;
+    coreAgents: number;
+    pattern: string;
+    facebookAutomationBoundary: {
+      role: string;
+      pluginId: string;
+      note: string;
+    };
+  };
+  agents: TopologyAgent[];
+  plugins: TopologyPlugin[];
+}
+
 export function Dashboard({ status, emit, on }: Props) {
   const [logs, setLogs] = useState<any[]>([]);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [agentStats, setAgentStats] = useState<any>(null);
+  const [topology, setTopology] = useState<SystemTopology | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getLogs(30).then(setLogs).catch(() => {});
-    api.getAgentStats().then(setAgentStats).catch(() => {});
+    setLoading(true);
+    Promise.all([
+      api.getLogs(30).then(setLogs).catch((err) => {
+        console.error('Failed to fetch logs:', err);
+      }),
+      api.getAgentStats().then(setAgentStats).catch((err) => {
+        console.error('Failed to fetch agent stats:', err);
+      }),
+      api.getSystemTopology().then(setTopology).catch((err) => {
+        console.error('Failed to fetch system topology:', err);
+      })
+    ]).finally(() => setLoading(false));
+
     const interval = setInterval(() => {
-      api.getLogs(30).then(setLogs).catch(() => {});
-      api.getAgentStats().then(setAgentStats).catch(() => {});
-    }, 5000);
+      api.getLogs(30).then(setLogs).catch((err) => {
+        console.error('Failed to fetch logs:', err);
+      });
+      api.getAgentStats().then(setAgentStats).catch((err) => {
+        console.error('Failed to fetch agent stats:', err);
+      });
+      api.getSystemTopology().then(setTopology).catch((err) => {
+        console.error('Failed to fetch system topology:', err);
+      });
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -39,7 +94,15 @@ export function Dashboard({ status, emit, on }: Props) {
     return () => { unsub1(); unsub2(); unsub3(); };
   }, [on]);
 
-  const fmtMs = (ms?: number) => ms === undefined ? '—' : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  const fmtMs = (ms?: number) => (ms === undefined ? '-' : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center h-full">
+        <div className="text-gray-400 animate-pulse">Loading dashboard...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -52,6 +115,32 @@ export function Dashboard({ status, emit, on }: Props) {
           <MiniStat icon={Zap} label="Active" value={agentStats.activeRuns} color={agentStats.activeRuns > 0 ? 'text-green-400' : 'text-gray-500'} pulse={agentStats.activeRuns > 0} />
           <MiniStat icon={Clock} label="Avg Duration" value={fmtMs(agentStats.avgDurationMs)} color="text-yellow-400" />
           <MiniStat icon={Cpu} label="Memory" value={`${agentStats.memoryMB}MB`} color={agentStats.memoryMB > 800 ? 'text-red-400' : 'text-purple-400'} />
+        </div>
+      )}
+
+      {/* Unified Topology */}
+      {topology && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+            <Brain className="w-4 h-4 text-cyan-400" />
+            Unified Topology ({topology.architecture.pattern})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {topology.agents.map((agent) => (
+              <AgentRuntimeCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+            {topology.plugins.map((plugin) => (
+              <div key={plugin.id} className="rounded-lg border border-gray-800 bg-gray-800/40 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-gray-200">{plugin.name}</p>
+                  <StatusBadge status={plugin.status} />
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">{plugin.id}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -101,7 +190,7 @@ export function Dashboard({ status, emit, on }: Props) {
               <p className="text-gray-600 text-sm text-center py-8">No activity yet. Start the bot!</p>
             )}
             {recentActivity.map((act, i) => (
-              <div key={i} className="flex gap-2 text-xs p-2 bg-gray-800/50 rounded-lg">
+              <div key={`${act.type}-${act.time?.getTime()}-${i}`} className="flex gap-2 text-xs p-2 bg-gray-800/50 rounded-lg">
                 <span className={`shrink-0 ${act.type === 'chat' ? 'text-blue-400' : act.type === 'comment' ? 'text-green-400' : 'text-purple-400'}`}>
                   [{act.type}]
                 </span>
@@ -122,7 +211,7 @@ export function Dashboard({ status, emit, on }: Props) {
           </h3>
           <div className="space-y-1 max-h-80 overflow-auto font-mono text-[11px]">
             {logs.map((log, i) => (
-              <div key={i} className={`flex gap-2 px-1 py-0.5 ${
+              <div key={`${log.created_at}-${log.type}-${i}`} className={`flex gap-2 px-1 py-0.5 ${
                 log.level === 'error' ? 'text-red-400' :
                 log.level === 'success' ? 'text-green-400' :
                 log.level === 'warning' ? 'text-yellow-400' : 'text-gray-500'
@@ -138,6 +227,47 @@ export function Dashboard({ status, emit, on }: Props) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function statusClasses(status: RuntimeStatus): string {
+  switch (status) {
+    case 'active':
+      return 'text-green-300 bg-green-500/20 border-green-500/30';
+    case 'degraded':
+      return 'text-yellow-300 bg-yellow-500/20 border-yellow-500/30';
+    default:
+      return 'text-gray-300 bg-gray-700/30 border-gray-700';
+  }
+}
+
+function StatusBadge({ status }: { status: RuntimeStatus }) {
+  return (
+    <span className={`text-[11px] px-2 py-0.5 rounded-full border capitalize ${statusClasses(status)}`}>
+      {status}
+    </span>
+  );
+}
+
+function AgentRuntimeCard({ agent }: { agent: TopologyAgent }) {
+  const errorMsg = agent.details?.lastRuntimeError as string | undefined;
+  return (
+    <div className={`rounded-lg border ${agent.status === 'degraded' ? 'border-yellow-500/40 bg-yellow-500/5' : 'border-gray-800 bg-gray-800/40'} px-3 py-2`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-medium text-gray-200 truncate">{agent.name}</p>
+        <StatusBadge status={agent.status} />
+      </div>
+      <p className="text-[11px] text-gray-500 mt-1">{agent.kind}</p>
+      <p className="text-[11px] text-gray-400 mt-1">Channels: {agent.channels.join(', ') || '-'}</p>
+      {agent.summonTargets.length > 0 && (
+        <p className="text-[11px] text-blue-300 mt-1">Summon: {agent.summonTargets.join(', ')}</p>
+      )}
+      {agent.status === 'degraded' && errorMsg && (
+        <p className="text-[11px] text-yellow-400/90 mt-1.5 leading-snug break-words line-clamp-3" title={errorMsg}>
+          ⚠ {errorMsg.length > 120 ? errorMsg.slice(0, 120) + '…' : errorMsg}
+        </p>
+      )}
     </div>
   );
 }

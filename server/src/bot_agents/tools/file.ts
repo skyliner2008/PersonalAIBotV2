@@ -17,24 +17,31 @@ const BLOCKED_DIRS = [
 ];
 const BLOCKED_EXTENSIONS = new Set(['.exe', '.dll', '.sys', '.bat', '.cmd', '.msi', '.scr', '.reg']);
 
-function validateFilePath(filePath: string): { safe: boolean; reason?: string } {
+function validateFilePath(filePath: string, mode: 'read' | 'write' = 'write'): { safe: boolean; reason?: string } {
   const resolved = path.resolve(filePath);
   const normalized = resolved.replace(/\\/g, '/');
-  // Block path traversal attempts
-  if (filePath.includes('..')) {
-    return { safe: false, reason: '🚫 Path traversal (..) ไม่อนุญาต' };
-  }
-  // Block system directories
+
+  // Block system directories (both read and write)
   for (const pattern of BLOCKED_DIRS) {
     if (pattern.test(normalized)) {
       return { safe: false, reason: `🚫 ไม่อนุญาตให้เข้าถึง system directory: ${resolved}` };
     }
   }
-  // Block dangerous file extensions (for write/delete only)
-  const ext = path.extname(resolved).toLowerCase();
-  if (BLOCKED_EXTENSIONS.has(ext)) {
-    return { safe: false, reason: `🚫 ไม่อนุญาตให้แก้ไขไฟล์ประเภท ${ext}` };
+
+  // Write/Delete: stricter checks
+  if (mode === 'write') {
+    // Block path traversal — must stay within cwd
+    const cwdResolved = path.resolve(process.cwd());
+    if (!resolved.startsWith(cwdResolved)) {
+      return { safe: false, reason: '🚫 Path traversal — เข้าถึงบริเวณที่ไม่อนุญาต' };
+    }
+    // Block dangerous file extensions (write/delete only)
+    const ext = path.extname(resolved).toLowerCase();
+    if (BLOCKED_EXTENSIONS.has(ext)) {
+      return { safe: false, reason: `🚫 ไม่อนุญาตให้แก้ไขไฟล์ประเภท ${ext}` };
+    }
   }
+
   return { safe: true };
 }
 
@@ -58,6 +65,8 @@ export const listFilesDeclaration: FunctionDeclaration = {
 };
 
 export async function listFiles({ directory_path }: { directory_path: string }): Promise<string> {
+  const check = validateFilePath(directory_path, 'read');
+  if (!check.safe) return check.reason!;
   try {
     const resolvedPath = path.resolve(directory_path);
     const files = fs.readdirSync(resolvedPath);
@@ -86,6 +95,8 @@ export const readFileContentDeclaration: FunctionDeclaration = {
 };
 
 export async function readFileContent({ file_path }: { file_path: string }): Promise<string> {
+  const check = validateFilePath(file_path, 'read');
+  if (!check.safe) return check.reason!;
   try {
     const resolvedPath = path.resolve(file_path);
     const content = fs.readFileSync(resolvedPath, 'utf8');
@@ -127,6 +138,12 @@ export async function writeFileContent({ file_path, content }: { file_path: stri
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.writeFileSync(resolvedPath, content, 'utf8');
+    
+    // Allow external listeners (e.g. SelfUpgrade) to react before the server restarts
+    if (typeof (global as any).onFileWrittenByTool === 'function') {
+      (global as any).onFileWrittenByTool(resolvedPath);
+    }
+
     return `เขียนไฟล์ลงใน ${resolvedPath} สำเร็จแล้ว`;
   } catch (error: any) {
     return `ไม่สามารถเขียนไฟล์ได้: ${error.message}`;
@@ -163,5 +180,57 @@ export async function deleteFile({ file_path }: { file_path: string }): Promise<
     return `ไม่พบไฟล์ที่ต้องการลบ: ${resolvedPath}`;
   } catch (error: any) {
     return `เกิดข้อผิดพลาดในการลบไฟล์: ${error.message}`;
+  }
+}
+
+// ==========================================
+// 5. Surgical Code Replacement (Agentic Core)
+// ==========================================
+export const replaceCodeBlockDeclaration: FunctionDeclaration = {
+  name: "replace_code_block",
+  description: "ผ่าตัดโค้ด: แทนที่ข้อความหรือบล็อคโค้ดเดิมด้วยโค้ดใหม่ (ปลอดภัยกว่าการเขียนทับทั้งไฟล์)",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      file_path: {
+        type: Type.STRING,
+        description: "พาธของไฟล์ที่ต้องการแก้ไข",
+      },
+      exact_old_string: {
+        type: Type.STRING,
+        description: "ข้อความ/โค้ดเดิมเป๊ะๆ ที่ต้องการจะแก้ (รวม Tab/Space ให้ตรง)",
+      },
+      new_string: {
+        type: Type.STRING,
+        description: "ข้อความ/โค้ดใหม่ที่จะใส่ลงไปแทนที่",
+      },
+    },
+    required: ["file_path", "exact_old_string", "new_string"],
+  },
+};
+
+export async function replaceCodeBlock({ file_path, exact_old_string, new_string }: { file_path: string, exact_old_string: string, new_string: string }): Promise<string> {
+  const check = validateFilePath(file_path);
+  if (!check.safe) return check.reason!;
+  try {
+    const resolvedPath = path.resolve(file_path);
+    if (!fs.existsSync(resolvedPath)) {
+      return `Error: ไม่พบไฟล์ที่กำหนด: ${resolvedPath}`;
+    }
+    const content = fs.readFileSync(resolvedPath, 'utf8');
+    if (!content.includes(exact_old_string)) {
+      return `Error: ค้นหา exact_old_string ไม่เจอ กรุณาตรวจสอบว่าก็อปปี้มารวม \n และช่องว่าง (Space/Tab) ตรงตามต้นฉบับหรือไม่`;
+    }
+    const newContent = content.replace(exact_old_string, new_string);
+    fs.writeFileSync(resolvedPath, newContent, 'utf8');
+    
+    // Allow external listeners (e.g. SelfUpgrade) to react
+    if (typeof (global as any).onFileWrittenByTool === 'function') {
+      (global as any).onFileWrittenByTool(resolvedPath);
+    }
+
+    return `Successfully replaced the exactly matched code block in ${resolvedPath}.`;
+  } catch (error: any) {
+    return `Error failed to replace code block: ${error.message}`;
   }
 }

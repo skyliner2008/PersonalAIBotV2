@@ -7,7 +7,7 @@
 // Layer 4: Archival Memory — Semantic embeddings for long-term facts
 // ============================================================
 
-import { getDb } from '../database/db.js';
+import { getDb, upsertConversation } from '../database/db.js';
 import type {
     CoreMemoryBlock,
     MemoryMessage,
@@ -16,14 +16,62 @@ import type {
     BuildContextOptions,
 } from './types.js';
 import { getSummary, maybeSummarize } from './conversationSummarizer.js';
+import { getVectorStore, initVectorStore, type VectorDocument } from './vectorStore.js';
+import { embedText } from './embeddingProvider.js';
+import { memoryMutex } from '../utils/mutex.js';
+import { searchCache } from '../utils/cache.js';
+import { createLogger } from '../utils/logger.js';
+import { queryGraph } from './graphMemory.js';
+import { pingActivity } from '../scheduler/subconscious.js';
+import { getMaxMemoryMessages } from '../config/runtimeSettings.js';
+
+const log = createLogger('Memory');
 
 // ---- Config — ปรับค่าให้รองรับ context ที่ใหญ่ขึ้น ----
-const WORKING_MEMORY_LIMIT = 25;
 const SESSION_TTL_MS = 60 * 60_000;  // 60 นาที
 const ARCHIVAL_LIMIT = 200;
 const CORE_EXTRACT_INTERVAL = 15;
 const ARCHIVAL_EXTRACT_INTERVAL = 5;
 const MAX_CACHE_ENTRIES = 500;       // จำกัด RAM cache ป้องกัน memory leak
+
+// Token Budget — สำหรับ Gemini 2.0 Flash (1M context, แต่เราจำกัดไว้ให้ประหยัด)
+const TOKEN_BUDGET = {
+    systemPrompt: 2_000,     // System instruction + persona + bot identity
+    coreMemory: 1_500,       // Core memory blocks
+    summary: 500,            // Conversation summary
+    archival: 2_000,         // Archival facts
+    history: 8_000,          // Working memory messages (main budget)
+    userMessage: 2_000,      // Current user message + attachments
+    total: 16_000,           // Max tokens per request (~40K chars)
+};
+
+/** Estimate tokens from text (Thai/English: ~2.5 chars per token) */
+function estimateTokens(text: string): number {
+    return Math.ceil(text.length / 2.5);
+}
+
+/** Trim messages from oldest first until within budget, keep at least minKeep */
+function trimToTokenBudget(messages: MemoryMessage[], budgetTokens: number, minKeep: number = 4): MemoryMessage[] {
+    let totalTokens = messages.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    if (totalTokens <= budgetTokens) return messages;
+
+    // Try truncating long messages first (keep first 300 chars)
+    const truncated = messages.map((m, i) => {
+        if (i < messages.length - minKeep && m.content.length > 600) {
+            return { ...m, content: m.content.substring(0, 300) + '...(ย่อ)' };
+        }
+        return m;
+    });
+
+    // Remove oldest messages until within budget
+    let startIdx = 0;
+    while (totalTokens > budgetTokens && startIdx < truncated.length - minKeep) {
+        totalTokens -= estimateTokens(truncated[startIdx].content);
+        startIdx++;
+    }
+
+    return truncated.slice(startIdx);
+}
 
 // ============================================================
 // RAM Cache for Working Memory (LRU-based eviction)
@@ -34,31 +82,89 @@ const ramCache: Record<string, {
     messageCount: number;
 }> = {};
 
+// Synchronization flag to prevent concurrent cache operations
+let cacheOperationInProgress = false;
+
 /** LRU eviction: ลบ session ที่เก่าที่สุดเมื่อ cache เต็ม */
 function evictLRU(): void {
     const keys = Object.keys(ramCache);
     if (keys.length <= MAX_CACHE_ENTRIES) return;
-    const sorted = keys
-        .map(k => ({ key: k, ts: ramCache[k].lastActive }))
-        .sort((a, b) => a.ts - b.ts);
-    const toEvict = sorted.slice(0, keys.length - MAX_CACHE_ENTRIES);
-    for (const e of toEvict) delete ramCache[e.key];
-    if (toEvict.length > 0) console.log(`[Memory] LRU evicted ${toEvict.length} sessions`);
+    try {
+        const sorted = keys
+            .map(k => {
+                const entry = ramCache[k];
+                if (!entry) return null;
+                return { key: k, ts: entry.lastActive };
+            })
+            .filter((item): item is { key: string; ts: number } => item !== null)
+            .sort((a, b) => a.ts - b.ts);
+        const toEvict = sorted.slice(0, Math.max(0, keys.length - MAX_CACHE_ENTRIES));
+        for (const e of toEvict) delete ramCache[e.key];
+        if (toEvict.length > 0) log.info(`LRU evicted ${toEvict.length} sessions`);
+    } catch (err) {
+        log.warn('Error during LRU cache eviction', { error: String(err) });
+    }
 }
 
-// Periodic cleanup — TTL + LRU (ทุก 5 นาที)
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const chatId of Object.keys(ramCache)) {
-        if (now - ramCache[chatId].lastActive > SESSION_TTL_MS) {
-            delete ramCache[chatId];
-            cleaned++;
+// Periodic cleanup — TTL + LRU (ทุก 5 นาที) + Vector index flush
+const cleanupInterval = setInterval(() => {
+    // Prevent concurrent eviction/cleanup operations
+    if (cacheOperationInProgress) return;
+    cacheOperationInProgress = true;
+    try {
+        const now = Date.now();
+        let cleaned = 0;
+        for (const chatId of Object.keys(ramCache)) {
+            const entry = ramCache[chatId];
+            // Null check: cache entry might be evicted elsewhere
+            if (entry && now - entry.lastActive > SESSION_TTL_MS) {
+                delete ramCache[chatId];
+                cleaned++;
+            }
         }
+        evictLRU();
+        if (cleaned > 0) log.info(`TTL-cleaned ${cleaned} inactive sessions`);
+    } finally {
+        cacheOperationInProgress = false;
     }
-    evictLRU();
-    if (cleaned > 0) console.log(`[Memory] TTL-cleaned ${cleaned} inactive sessions`);
 }, 5 * 60_000);
+
+// Prevent the interval from keeping the Node.js process alive
+if (typeof cleanupInterval.unref === 'function') {
+    cleanupInterval.unref();
+}
+
+export function stopMemoryCleanup(): void {
+    clearInterval(cleanupInterval);
+}
+
+// Initialize Vector Store on startup
+let vectorStoreReady = false;
+let vectorStoreInitPromise: Promise<void> | null = null;
+
+export async function initUnifiedMemory(): Promise<void> {
+    if (vectorStoreInitPromise) {
+        await vectorStoreInitPromise;
+        return;
+    }
+    vectorStoreInitPromise = (async () => {
+        try {
+            await initVectorStore();
+            vectorStoreReady = true;
+            log.info('Vector Store initialized');
+            const vs = await getVectorStore();
+            const stats = await vs.getStats();
+            if (stats.totalDocuments === 0) {
+                log.info('Building initial vector index from SQLite...');
+                const result = await vs.rebuildFromSQLite();
+                log.info(`Vector index migration: ${result.migrated} docs, ${result.errors} errors`);
+            }
+        } catch (err) {
+            log.warn('Failed to initialize Vector Store:', { error: String(err) });
+        }
+    })();
+    await vectorStoreInitPromise;
+}
 
 // ============================================================
 // CORE MEMORY (Layer 1) — always in system prompt
@@ -99,10 +205,30 @@ export function formatCoreMemory(blocks: CoreMemoryBlock[]): string {
 // ============================================================
 
 export function addMessage(chatId: string, role: string, content: string): void {
+    const workingMemoryLimit = getMaxMemoryMessages();
+    // 0. Aggressive token saving: strip <think>, Base64 images, and overly long lines
+    let cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    cleanContent = cleanContent.replace(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+/gi, '[Base64 Image Truncated]');
+    const lines = cleanContent.split('\n');
+    cleanContent = lines.map(l => l.length > 2500 ? l.substring(0, 2500) + '...[Truncated]' : l).join('\n');
+    if (!cleanContent) return; // Do not save entirely empty messages
+
+    // Ping subconscious that the user is active
+    if (role === 'user') {
+        pingActivity();
+    }
+
+    // 0.5 Ensure parent conversation exists before writing recall messages.
+    // This prevents FOREIGN KEY failures for ad-hoc chat IDs (e.g. admin_web_session).
+    const displayName = chatId.startsWith('admin_')
+        ? 'Jarvis Terminal Admin'
+        : 'Unified Memory Session';
+    upsertConversation(chatId, chatId, displayName);
+
     // 1. Save to DB (recall memory)
     getDb().prepare(
         'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)'
-    ).run(chatId, role, content);
+    ).run(chatId, role, cleanContent);
 
     // 2. Update RAM cache (with LRU check)
     if (!ramCache[chatId]) {
@@ -111,17 +237,20 @@ export function addMessage(chatId: string, role: string, content: string): void 
         // Load recent from DB to prime cache
         const rows = getDb()
             .prepare('SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?')
-            .all(chatId, WORKING_MEMORY_LIMIT) as any[];
+            .all(chatId, workingMemoryLimit) as any[];
         ramCache[chatId].messages = rows.reverse().map(r => ({
             chatId,
             role: r.role,
             content: r.content,
         }));
+        // Initialize messageCount from DB to keep extraction triggers aligned
+        const countRow = getDb().prepare('SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?').get(chatId) as any;
+        ramCache[chatId].messageCount = countRow?.c || 0;
     } else {
-        ramCache[chatId].messages.push({ chatId, role: role as any, content });
+        ramCache[chatId].messages.push({ chatId, role: role as any, content: cleanContent });
         // Trim to limit
-        if (ramCache[chatId].messages.length > WORKING_MEMORY_LIMIT) {
-            ramCache[chatId].messages = ramCache[chatId].messages.slice(-WORKING_MEMORY_LIMIT);
+        if (ramCache[chatId].messages.length > workingMemoryLimit) {
+            ramCache[chatId].messages = ramCache[chatId].messages.slice(-workingMemoryLimit);
         }
     }
     ramCache[chatId].lastActive = Date.now();
@@ -129,16 +258,20 @@ export function addMessage(chatId: string, role: string, content: string): void 
 }
 
 export function getWorkingMemory(chatId: string): MemoryMessage[] {
+    const workingMemoryLimit = getMaxMemoryMessages();
     if (!ramCache[chatId]) {
         // Load from DB
         const rows = getDb()
             .prepare('SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?')
-            .all(chatId, WORKING_MEMORY_LIMIT) as any[];
+            .all(chatId, workingMemoryLimit) as any[];
         ramCache[chatId] = {
             messages: rows.reverse().map(r => ({ chatId, role: r.role, content: r.content })),
             lastActive: Date.now(),
             messageCount: 0,
         };
+    }
+    if (ramCache[chatId].messages.length > workingMemoryLimit) {
+        ramCache[chatId].messages = ramCache[chatId].messages.slice(-workingMemoryLimit);
     }
     ramCache[chatId].lastActive = Date.now();
     return ramCache[chatId].messages;
@@ -146,7 +279,12 @@ export function getWorkingMemory(chatId: string): MemoryMessage[] {
 
 // Also save to episodes table for backward compatibility with Telegram/LINE
 export function addEpisode(chatId: string, role: string, content: string): void {
-    getDb().prepare('INSERT INTO episodes (chat_id, role, content) VALUES (?, ?, ?)').run(chatId, role, content);
+    let cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    cleanContent = cleanContent.replace(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+/gi, '[Base64 Image Truncated]');
+    const lines = cleanContent.split('\n');
+    cleanContent = lines.map(l => l.length > 2500 ? l.substring(0, 2500) + '...[Truncated]' : l).join('\n');
+    if (!cleanContent) return;
+    getDb().prepare('INSERT INTO episodes (chat_id, role, content) VALUES (?, ?, ?)').run(chatId, role, cleanContent);
 }
 
 // ============================================================
@@ -198,67 +336,184 @@ export function setEmbeddingProvider(fn: (text: string) => Promise<number[]>): v
 }
 
 export async function saveArchivalFact(chatId: string, fact: string): Promise<void> {
-    let embedding: Buffer | null = null;
+    // Use per-chatId mutex to prevent concurrent duplicate checks
+    return memoryMutex.withLock(`archival:${chatId}`, async () => {
+        let embedding: Buffer | null = null;
+        let embeddingVec: number[] = [];
 
-    if (embeddingProvider) {
-        try {
-            const vec = await embeddingProvider(fact);
-            embedding = Buffer.from(new Float32Array(vec).buffer);
-        } catch (e) {
-            console.error('[Memory] Embedding failed, saving without:', e);
+        if (embeddingProvider) {
+            try {
+                const vec = await embeddingProvider(fact);
+                embedding = Buffer.from(new Float32Array(vec).buffer);
+                embeddingVec = vec;
+            } catch (e) {
+                console.error('[Memory] Embedding failed, saving without:', e);
+            }
         }
-    }
 
-    // Dedup: check if very similar fact already exists
-    if (embedding) {
-        const existing = getArchivalFacts(chatId);
-        for (const ex of existing) {
-            if (ex.embedding) {
-                const sim = cosineSimilarity(
-                    new Float32Array(embedding.buffer, embedding.byteOffset, embedding.byteLength / 4),
-                    ex.embedding
-                );
-                if (sim > 0.9) {
-                    // Update existing instead of inserting duplicate
-                    getDb().prepare('UPDATE archival_memory SET fact = ?, embedding = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
-                        .run(fact, embedding, ex.id);
-                    return;
+        // Dedup: check if very similar fact already exists
+        if (embedding && embeddingVec.length > 0) {
+            const existing = getArchivalFacts(chatId);
+            for (const ex of existing) {
+                if (ex.embedding) {
+                    const sim = cosineSimilarity(
+                        new Float32Array(embedding.buffer, embedding.byteOffset, embedding.byteLength / 4),
+                        ex.embedding
+                    );
+                    if (sim > 0.9) {
+                        // Update existing instead of inserting duplicate
+                        const updated = getDb().prepare('UPDATE archival_memory SET fact = ?, embedding = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
+                            .run(fact, embedding, ex.id);
+
+                        // Also update in vector store
+                        if (vectorStoreReady) {
+                            try {
+                                const vs = await getVectorStore();
+                                const doc: VectorDocument = {
+                                    id: `archival_${ex.id}`,
+                                    text: fact,
+                                    embedding: embeddingVec,
+                                    metadata: {
+                                        chatId,
+                                        type: 'archival',
+                                        createdAt: new Date().toISOString(),
+                                    },
+                                };
+                                await vs.upsert(doc);
+                            } catch (err) {
+                                log.warn('Failed to update vector store:', { error: String(err) });
+                            }
+                        }
+                        return;
+                    }
                 }
             }
         }
-    }
 
-    getDb().prepare('INSERT INTO archival_memory (chat_id, fact, embedding) VALUES (?, ?, ?)')
-        .run(chatId, fact, embedding);
+        const result = getDb().prepare('INSERT INTO archival_memory (chat_id, fact, embedding) VALUES (?, ?, ?)')
+            .run(chatId, fact, embedding);
 
-    // 🧠 Smart Pruning — ถ้าเกิน ARCHIVAL_LIMIT ให้ลบ facts ที่สั้นและเก่าที่สุดออก
-    // (ไม่ลบแบบ FIFO ล้วนๆ — facts สั้นมักมีคุณค่าน้อยกว่า)
-    const count = getDb().prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any;
-    if (count?.c > ARCHIVAL_LIMIT) {
-        const excess = count.c - ARCHIVAL_LIMIT;
-        // ลบ facts ที่สั้นที่สุดก่อน (priority: short = low-value), หากสั้นเท่ากันให้ลบเก่าก่อน
-        getDb().prepare(`
-            DELETE FROM archival_memory WHERE id IN (
+        // Add to vector store for fast semantic search
+        if (vectorStoreReady && embeddingVec.length > 0) {
+            try {
+                const vs = await getVectorStore();
+                // Use SQLite rowid or generate ID
+                const newId = (result as any).lastInsertRowid || Date.now();
+                const doc: VectorDocument = {
+                    id: `archival_${newId}`,
+                    text: fact,
+                    embedding: embeddingVec,
+                    metadata: {
+                        chatId,
+                        type: 'archival',
+                        createdAt: new Date().toISOString(),
+                    },
+                };
+                await vs.upsert(doc);
+            } catch (err) {
+                console.warn('[Memory] Failed to add to vector store:', err);
+            }
+        }
+
+        // 🧠 Smart Pruning — ถ้าเกิน ARCHIVAL_LIMIT ให้ลบ facts ที่สั้นและเก่าที่สุดออก
+        // (ไม่ลบแบบ FIFO ล้วนๆ — facts สั้นมักมีคุณค่าน้อยกว่า)
+        const count = getDb().prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any;
+        if (count?.c > ARCHIVAL_LIMIT) {
+            const excess = count.c - ARCHIVAL_LIMIT;
+            // ลบ facts ที่สั้นที่สุดก่อน (priority: short = low-value), หากสั้นเท่ากันให้ลบเก่าก่อน
+            const toDelete = getDb().prepare(`
                 SELECT id FROM archival_memory
                 WHERE chat_id = ?
                 ORDER BY LENGTH(fact) ASC, created_at ASC
                 LIMIT ?
-            )
-        `).run(chatId, excess);
-    }
+            `).all(chatId, excess) as any[];
+
+            getDb().prepare(`
+                DELETE FROM archival_memory WHERE id IN (
+                    SELECT id FROM archival_memory
+                    WHERE chat_id = ?
+                    ORDER BY LENGTH(fact) ASC, created_at ASC
+                    LIMIT ?
+                )
+            `).run(chatId, excess);
+
+            // Also delete from vector store
+            if (vectorStoreReady) {
+                try {
+                    const vs = await getVectorStore();
+                    for (const row of toDelete) {
+                        await vs.delete(`archival_${row.id}`);
+                    }
+                } catch (err) {
+                    console.warn('[Memory] Failed to delete from vector store:', err);
+                }
+            }
+        }
+    }); // end memoryMutex.withLock
 }
 
 export async function searchArchival(chatId: string, query: string, limit: number = 3, threshold: number = 0.65): Promise<string[]> {
-    if (!embeddingProvider) {
-        // Fallback: text search (escape LIKE wildcards to prevent injection)
+    // Cache: same chatId + query → same results (1 hour TTL)
+    const cacheKey = `arch:${chatId}:${query.substring(0, 100)}:${limit}`;
+    const cached = searchCache.get(cacheKey);
+    if (cached) return cached as string[];
+
+    const results = await _searchArchivalCore(chatId, query, limit, threshold);
+    if (results.length > 0) {
+        searchCache.set(cacheKey, results);
+    }
+    return results;
+}
+
+async function _searchArchivalCore(chatId: string, query: string, limit: number, threshold: number): Promise<string[]> {
+    const textFallbackSearch = (): string[] => {
         const safeQ = escapeLikePattern(query.substring(0, 50));
         const rows = getDb().prepare("SELECT fact FROM archival_memory WHERE chat_id = ? AND fact LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?")
             .all(chatId, `%${safeQ}%`, limit) as any[];
         return rows.map(r => r.fact);
+    };
+
+    if (!embeddingProvider) {
+        return textFallbackSearch();
     }
 
     try {
-        const queryVec = new Float32Array(await embeddingProvider(query));
+        const queryVec = await embedText(query);
+        if (!queryVec || queryVec.length === 0) {
+            return textFallbackSearch();
+        }
+
+        // Try Vector Store search first
+        if (vectorStoreReady) {
+            try {
+                const vs = await getVectorStore();
+                const results = await vs.search(queryVec, Math.max(limit * 2, 10), { chatId, type: 'archival' });
+
+                if (results.length > 0) {
+                    // Apply recency and length bonuses on top of vector similarity
+                    const now = Date.now();
+                    const scored = results.map(r => {
+                        const ageMs = now - new Date(r.metadata.createdAt).getTime();
+                        const recencyScore = Math.exp(-ageMs / (30 * 24 * 60 * 60 * 1000)) * 0.5 + 0.5;
+                        const lengthBonus = Math.min(r.text.length / 200, 1) * 0.1;
+                        const importanceScore = (r.score * 0.7) + (recencyScore * 0.2) + lengthBonus;
+                        return { fact: r.text, score: importanceScore, semantic: r.score };
+                    })
+                        .filter(r => r.semantic > threshold)
+                        .sort((a, b) => b.score - a.score)
+                        .slice(0, limit);
+
+                    if (scored.length > 0) {
+                        return scored.map(s => s.fact);
+                    }
+                }
+            } catch (err) {
+                console.warn('[Memory] Vector store search failed, falling back to SQLite:', err);
+            }
+        }
+
+        // Fallback: SQLite cosine similarity (slower but always works)
+        const queryVecTyped = new Float32Array(queryVec);
         const facts = getArchivalFacts(chatId);
         if (facts.length === 0) return [];
 
@@ -266,23 +521,25 @@ export async function searchArchival(chatId: string, query: string, limit: numbe
         const scored = facts
             .filter(f => f.embedding)
             .map(f => {
-                const semanticScore = cosineSimilarity(queryVec, f.embedding!);
+                const semanticScore = cosineSimilarity(queryVecTyped, f.embedding!);
                 // 🎯 Importance = semantic similarity (70%) + recency (20%) + length bonus (10%)
-                // recency: decay หลัง 30 วัน → score ลดลงเป็น 0.5
                 const ageMs = now - new Date(f.createdAt || 0).getTime();
                 const recencyScore = Math.exp(-ageMs / (30 * 24 * 60 * 60 * 1000)) * 0.5 + 0.5;
                 const lengthBonus = Math.min(f.fact.length / 200, 1) * 0.1;
                 const importanceScore = (semanticScore * 0.7) + (recencyScore * 0.2) + lengthBonus;
                 return { fact: f.fact, score: importanceScore, semantic: semanticScore };
             })
-            .filter(r => r.semantic > threshold) // semantic ต้องผ่าน threshold ก่อน
-            .sort((a, b) => b.score - a.score)   // sort โดย composite score
+            .filter(r => r.semantic > threshold)
+            .sort((a, b) => b.score - a.score)
             .slice(0, limit);
 
-        return scored.map(s => s.fact);
+        if (scored.length > 0) {
+            return scored.map(s => s.fact);
+        }
+        return textFallbackSearch();
     } catch (e) {
         console.error('[Memory] Archival search error:', e);
-        return [];
+        return textFallbackSearch();
     }
 }
 
@@ -303,90 +560,153 @@ function getArchivalFacts(chatId: string): { id: number; chatId: string; fact: s
 // BUILD CONTEXT — combines all 4 layers
 // ============================================================
 
+/** Calculate dynamic token budget based on model context window */
+function getDynamicTokenBudget(modelContextWindow?: number) {
+    const budget = { ...TOKEN_BUDGET };
+    if (modelContextWindow) {
+        if (modelContextWindow >= 1_000_000) {
+            budget.history = 12_000;
+            budget.archival = 3_000;
+            budget.total = 22_000;
+        } else if (modelContextWindow >= 128_000) {
+            budget.history = 10_000;
+            budget.archival = 2_500;
+            budget.total = 18_000;
+        }
+    }
+    return budget;
+}
+
+/** Retrieve context from multiple layers in parallel */
+async function retrieveContextLayers(
+    chatId: string,
+    userMessage: string,
+    options: { skipSearch: boolean; maxArchival: number; threshold: number }
+) {
+    const { skipSearch, maxArchival, threshold } = options;
+
+    return Promise.all([
+        // Layer 3: Recall Memory — text search
+        (async (): Promise<string[]> => {
+            if (skipSearch || userMessage.length <= 15) return [];
+            try {
+                const context: string[] = [];
+                const keywords = userMessage.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
+                for (const kw of keywords) {
+                    const found = searchRecall(chatId, kw, 3);
+                    for (const msg of found) {
+                        if (msg?.content && !context.includes(msg.content) && msg.content.length > 20) {
+                            context.push(`[${msg.role}]: ${msg.content.substring(0, 200)}`);
+                        }
+                    }
+                }
+                return context;
+            } catch (err) { log.warn('Recall memory context failed', { error: String(err) }); return []; }
+        })(),
+
+        // Layer 4: Archival Memory — vector search
+        (async (): Promise<string[]> => {
+            if (skipSearch) return [];
+            try {
+                return await searchArchival(chatId, userMessage, maxArchival, threshold);
+            } catch (err) { log.warn('Archival search failed', { error: String(err) }); return []; }
+        })(),
+
+        // Layer 5: GraphRAG — relational knowledge
+        (async (): Promise<string> => {
+            if (skipSearch || userMessage.length <= 10) return '';
+            try {
+                const graphKeywords = userMessage
+                    .split(/[\s,;.!?\u0E00-\u0E7F]+/)
+                    .filter(w => w.length > 2)
+                    .slice(0, 5);
+                if (graphKeywords.length > 0) {
+                    return queryGraph(chatId, graphKeywords, 8);
+                }
+            } catch (err) { log.debug('Graph query failed', { error: String(err) }); }
+            return '';
+        })(),
+
+        // Layer 6: Conversation Summary
+        (async (): Promise<string> => {
+            try {
+                const { getConversationSummary } = await import('../database/db.js');
+                const { summary } = getConversationSummary(chatId);
+                return summary || '';
+            } catch { return ''; }
+        })()
+    ]);
+}
+
+/** Enhance graph context by doing a multi-hop search from archival facts */
+function enhanceGraphWithArchival(chatId: string, archivalContext: string[], graphContext: string): string {
+    try {
+        const entityKeywords = archivalContext
+            .flatMap(f => f.split(/[\s,;.!?]+/).filter(w => w.length > 3))
+            .slice(0, 5);
+        if (entityKeywords.length > 0) {
+            const hopResult = queryGraph(chatId, entityKeywords, 4);
+            if (hopResult && hopResult !== graphContext) {
+                return graphContext ? `${graphContext}\n${hopResult}` : hopResult;
+            }
+        }
+    } catch (err) { log.debug('Multi-hop graph retrieval failed', { error: String(err) }); }
+    return graphContext;
+}
+
 export async function buildContext(
     chatId: string,
     userMessage: string,
     options: BuildContextOptions = {}
 ): Promise<MemoryContext> {
-    const maxRecent = options.maxRecent ?? WORKING_MEMORY_LIMIT;
+    const maxRecent = options.maxRecent ?? getMaxMemoryMessages();
     const maxArchival = options.maxArchival ?? 5;
     const threshold = options.archivalThreshold ?? 0.55;
 
-    // Layer 1: Core Memory
+    // Layer 1: Core Memory (sync)
     const coreBlocks = getCoreMemory(chatId);
     const coreMemoryText = formatCoreMemory(coreBlocks);
 
-    // Layer 2: Working Memory — ใช้ smart trimming
+    // Layer 2: Working Memory
     const allWorking = getWorkingMemory(chatId);
-    let workingMessages = allWorking.slice(-maxRecent);
+    const recentMessages = allWorking.slice(-maxRecent);
 
-    // Smart token budget: ถ้า context ใหญ่เกินไป ให้ตัดข้อความเก่าที่ยาว
-    const MAX_CONTEXT_CHARS = 30_000;
-    let totalChars = workingMessages.reduce((sum, m) => sum + m.content.length, 0);
-    while (totalChars > MAX_CONTEXT_CHARS && workingMessages.length > 4) {
-        const removed = workingMessages.shift()!;
-        totalChars -= removed.content.length;
-    }
+    // Token Budget Management
+    const dynamicBudget = getDynamicTokenBudget(options.modelContextWindow);
+    const coreTokens = estimateTokens(coreMemoryText);
+    const usedBudget = Math.min(coreTokens, dynamicBudget.coreMemory) + dynamicBudget.systemPrompt + dynamicBudget.summary;
+    const historyBudget = dynamicBudget.total - usedBudget - dynamicBudget.archival - dynamicBudget.userMessage;
+    const workingMessages = trimToTokenBudget(recentMessages, Math.max(historyBudget, dynamicBudget.history));
 
-    // Layer 3: Recall Memory — ค้นหาบริบทเก่าที่เกี่ยวข้อง (text search)
-    let recallContext: string[] = [];
-    if (userMessage.length > 15 && !options.skipArchival) {
-        const keywords = userMessage.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
-        for (const kw of keywords) {
-            const found = searchRecall(chatId, kw, 3);
-            for (const msg of found) {
-                if (msg?.content && !recallContext.includes(msg.content) && msg.content.length > 20) {
-                    recallContext.push(`[${msg.role}]: ${msg.content.substring(0, 200)}`);
-                }
-            }
-            if (recallContext.length >= 5) break;
-        }
-    }
+    // Parallel Retrieval: Layer 3, 4, 5, 6
+    const skipSearch = !!options.skipArchival;
+    const [_, archivalContext, graphContext, summaryContext] = await retrieveContextLayers(
+        chatId,
+        userMessage,
+        { skipSearch, maxArchival, threshold }
+    );
 
-    // Layer 4: Archival Memory (semantic search)
-    let archivalFacts: string[] = [];
-    if (!options.skipArchival && userMessage) {
-        archivalFacts = await searchArchival(chatId, userMessage, maxArchival, threshold);
-    }
+    // Multi-hop Retrieval
+    const enhancedGraphContext = !skipSearch && archivalContext.length > 0
+        ? enhanceGraphWithArchival(chatId, archivalContext, graphContext)
+        : graphContext;
 
-    // Merge recall context into archival facts (deduplicated)
-    if (recallContext.length > 0) {
-        const existingSet = new Set(archivalFacts);
-        for (const rc of recallContext) {
-            if (!existingSet.has(rc)) archivalFacts.push(rc);
-        }
-    }
-
-    // Conversation Summary (auto-generated)
-    const conversationSummary = getSummary(chatId);
-
-    // Token estimate
-    let chars = coreMemoryText.length + conversationSummary.length;
-    for (const m of workingMessages) chars += m.content.length;
-    for (const f of archivalFacts) chars += f.length;
-    chars += 800; // system prompt overhead (เพิ่มจาก 400 เพราะ prompt ใหญ่ขึ้น)
-    const tokenEstimate = Math.round(chars / 2.5);
-
-    // Trigger async summarization if needed (non-blocking)
-    setImmediate(() => maybeSummarize(chatId).catch(() => { }));
+    const stats = getMemoryStats(chatId);
 
     return {
         coreMemoryText,
         workingMessages,
-        archivalFacts,
-        conversationSummary,
-        tokenEstimate,
+        archivalFacts: archivalContext,
+        tokenEstimate: 0,
+        conversationSummary: summaryContext,
+        graphContext: enhancedGraphContext || undefined,
         stats: {
-            coreBlocks: coreBlocks.length,
-            workingMessages: workingMessages.length,
-            archivalFacts: archivalFacts.length,
-        },
+            coreBlocks: stats.coreBlocks,
+            workingMessages: stats.workingMessages,
+            archivalFacts: stats.archivalFacts,
+        }
     };
 }
-
-// ============================================================
-// AUTO-EXTRACTION — extracts facts from conversation
-// ============================================================
 
 export function shouldExtractCore(chatId: string): boolean {
     return (ramCache[chatId]?.messageCount || 0) > 0 &&
@@ -415,11 +735,21 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
     return denom === 0 ? 0 : dot / denom;
 }
 
-export function clearMemory(chatId: string): void {
+export async function clearMemory(chatId: string): Promise<void> {
     delete ramCache[chatId];
     getDb().prepare('DELETE FROM core_memory WHERE chat_id = ?').run(chatId);
     getDb().prepare('DELETE FROM archival_memory WHERE chat_id = ?').run(chatId);
     getDb().prepare('DELETE FROM messages WHERE conversation_id = ?').run(chatId);
+
+    // Also clear from vector store
+    if (vectorStoreReady) {
+        try {
+            const vs = await getVectorStore();
+            await vs.deleteByFilter({ chatId });
+        } catch (err) {
+            log.warn('Failed to clear vector store:', { error: String(err) });
+        }
+    }
 }
 
 export function getMemoryStats(chatId: string): {
@@ -428,9 +758,15 @@ export function getMemoryStats(chatId: string): {
     recallMessages: number;
     archivalFacts: number;
 } {
+    // Combine multiple queries into fewer database calls
     const coreBlocks = (getDb().prepare('SELECT COUNT(*) as c FROM core_memory WHERE chat_id = ?').get(chatId) as any)?.c || 0;
     const recallMessages = getRecallCount(chatId);
     const archivalFacts = (getDb().prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any)?.c || 0;
-    const workingMessages = getWorkingMemory(chatId).length;
+
+    // Use ramCache length directly instead of calling getWorkingMemory which loads full messages
+    const workingMessages = ramCache[chatId]?.messages.length || 0;
+
     return { coreBlocks, workingMessages, recallMessages, archivalFacts };
 }
+
+

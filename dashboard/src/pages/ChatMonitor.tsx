@@ -13,11 +13,16 @@ export function ChatMonitor({ status, emit, on }: Props) {
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load conversations
   useEffect(() => {
-    loadConversations();
+    setLoading(true);
+    loadConversations().finally(() => setLoading(false));
     const interval = setInterval(loadConversations, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -36,18 +41,37 @@ export function ChatMonitor({ status, emit, on }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Debounce search
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [search]);
+
   async function loadConversations() {
     try {
       const data = await api.getConversations();
-      setConversations(data);
-    } catch {}
+      // Handle both paginated {items, total} and legacy array response
+      setConversations(Array.isArray(data) ? data : (data?.items ?? []));
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+    }
   }
 
   async function loadMessages(convId: string) {
+    setLoadingMessages(true);
     try {
       const data = await api.getConversationMessages(convId);
       setMessages(data);
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+    } finally {
+      setLoadingMessages(false);
+    }
   }
 
   function selectConversation(convId: string) {
@@ -56,13 +80,18 @@ export function ChatMonitor({ status, emit, on }: Props) {
   }
 
   const filtered = conversations.filter(c =>
-    !search || c.fb_user_name?.toLowerCase().includes(search.toLowerCase())
+    !debouncedSearch || c.fb_user_name?.toLowerCase().includes(debouncedSearch.toLowerCase())
   );
 
   return (
     <div className="flex h-[calc(100vh-64px)]">
       {/* Conversation List */}
       <div className="w-80 border-r border-gray-800 flex flex-col">
+        {loading && (
+          <div className="absolute inset-0 bg-gray-950/50 flex items-center justify-center z-10">
+            <div className="text-gray-400 animate-pulse">Loading conversations...</div>
+          </div>
+        )}
         <div className="p-3 border-b border-gray-800">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
@@ -145,7 +174,15 @@ export function ChatMonitor({ status, emit, on }: Props) {
               </p>
             </div>
 
+            {/* Loading state */}
+            {loadingMessages && (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-gray-400 animate-pulse">Loading messages...</div>
+              </div>
+            )}
+
             {/* Messages */}
+            {!loadingMessages && (
             <div className="flex-1 overflow-auto p-4 space-y-3">
               {messages.map((msg, i) => (
                 <div key={i} className={`flex gap-2 ${msg.role === 'assistant' ? '' : 'flex-row-reverse'}`}>
@@ -168,6 +205,7 @@ export function ChatMonitor({ status, emit, on }: Props) {
               ))}
               <div ref={messagesEndRef} />
             </div>
+            )}
           </>
         )}
       </div>

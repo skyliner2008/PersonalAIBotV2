@@ -100,7 +100,7 @@ async function handleMessagingEvent(event: FBMessagingEvent): Promise<void> {
     // Deduplicate — atomic check+set to prevent race condition
     if (processedMessageIds.has(mid)) return;
     processedMessageIds.add(mid); // memory gate first
-    try { getDb().prepare('INSERT OR IGNORE INTO processed_messages (mid) VALUES (?)').run(mid); } catch { }
+    try { getDb().prepare('INSERT OR IGNORE INTO processed_messages (mid) VALUES (?)').run(mid); } catch (e) { console.debug('[WebhookHandler]', String(e)); }
     // Evict old entries
     if (processedMessageIds.size > MAX_PROCESSED) {
       const toDelete = [...processedMessageIds].slice(0, 1000);
@@ -108,7 +108,7 @@ async function handleMessagingEvent(event: FBMessagingEvent): Promise<void> {
       try {
         const stmt = getDb().prepare('DELETE FROM processed_messages WHERE mid = ?');
         getDb().transaction(() => { for (const id of toDelete) stmt.run(id); })();
-      } catch { }
+      } catch (e) { console.debug('[WebhookHandler]', String(e)); }
     }
 
     const senderId = event.sender.id;
@@ -183,9 +183,10 @@ async function processAndReplyMessage(senderId: string, text: string, messageId:
 
     // 5. Get conversation history
     const history = getDbMessages(convId, 20);
+    const filteredHistory = history.filter(m => m.role === 'user' || m.role === 'assistant') as {role: 'user'|'assistant', content: string}[];
 
     // 6. Build AI prompt & get reply
-    const aiMessages = buildChatMessages(persona, history, text);
+    const aiMessages = buildChatMessages(persona, filteredHistory, text);
     const aiResult = await aiChat('chat', aiMessages, {
       temperature: persona.temperature || 0.7,
       maxTokens: persona.max_tokens || 500,

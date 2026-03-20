@@ -1,54 +1,112 @@
 import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
-import { dbAll, dbGet, dbRun, getRecentLogs, getSetting, setSetting, getAllPersonas, getDefaultPersona, addLog, findQAMatch, upsertConversation, addMessage, getConversationMessages, getDb } from '../database/db.js';
+import authRoutes from './routes/authRoutes.js';
+import settingsRoutes from './routes/settingsRoutes.js';
+import chatRoutes from './routes/chatRoutes.js';
+import memoryRoutes from './routes/memoryRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import { dbAll, dbGet, dbRun, getRecentLogs, getAllPersonas, getDefaultPersona, addLog, findQAMatch } from '../database/db.js';
 import { isRunning } from '../automation/browser.js';
 import { isLoggedIn, login } from '../automation/facebook.js';
 import { isChatMonitorActive } from '../automation/chatBot.js';
 import { isCommentMonitorActive } from '../automation/commentBot.js';
 import { getScheduledPosts, schedulePost, deleteScheduledPost } from '../automation/postManager.js';
-import { testAllProviders, getProvider, getProviderForTask, aiChat } from '../ai/aiRouter.js';
+import { testAllProviders, getProvider, aiChat } from '../ai/aiRouter.js';
 import { buildContentPrompt } from '../ai/prompts/contentCreator.js';
-import { buildChatMessages } from '../ai/prompts/chatPersona.js';
 import { personaManager, PLATFORMS } from '../ai/personaManager.js';
 import type { PlatformType } from '../ai/personaManager.js';
-import {
-  buildContext as buildMemoryContext,
-  addMessage as umAddMessage,
-  shouldExtractArchival, shouldExtractCore,
-  saveArchivalFact, setCoreMemory,
-  getMemoryStats,
-} from '../memory/unifiedMemory.js';
-import { stripThinkTags } from '../utils.js';
-import type { AIProviderType } from '../ai/types.js';
-import { getAgentRunHistory, getAgentActiveRuns, getAgentStats } from '../bot_agents/agent.js';
-import { getCoreMemory, getWorkingMemory, formatCoreMemory } from '../memory/unifiedMemory.js';
+import { getAgentCompatibleProvider } from '../providers/agentRuntime.js';
+import { asyncHandler } from '../utils/errorHandler.js';
+import { validateBody } from '../utils/validation.js';
+import { z } from 'zod';
+import { createToolSchema } from '../schemas/index.js';
+import { requireAuth, requireReadWriteAuth } from '../utils/auth.js';
+import multer from 'multer';
+import { processFile, fileToGeminiPart, getSupportedExtensions } from '../utils/fileProcessor.js';
+import { config } from '../config.js';
+import { listDynamicTools, getDynamicTool, registerDynamicTool, unregisterDynamicTool, refreshDynamicTools } from '../bot_agents/tools/dynamicTools.js';
+import { parseIntParam } from './routes/shared.js';
+import { setManagedSetting } from '../config/settingsSecurity.js';
+import { configManager } from '../bot_agents/config/configManager.js';
+import { TaskType, getBestModelForTask } from '../bot_agents/config/aiConfig.js';
+import { agentEvents } from '../utils/socketBroadcast.js';
+
+// ============ Zod Schemas for Input Validation ============
+const fbLoginSchema = z.object({
+  email: z.string().min(1, 'email is required'),
+  password: z.string().min(1, 'password is required'),
+});
+
+const generatePostSchema = z.object({
+  topic: z.string().min(1, 'topic is required').max(1000),
+  style: z.string().max(100).optional().default('engaging'),
+});
+
+const aiTestSchema = z.object({
+  provider: z.string().min(1, 'provider is required'),
+  apiKey: z.string().optional(),
+});
+
+const personaSchema = z.object({
+  name: z.string().min(1, 'name is required').max(100),
+  description: z.string().max(500).optional().default(''),
+  system_prompt: z.string().min(1, 'system_prompt is required').max(10000),
+  personality_traits: z.union([z.string(), z.array(z.string())]).optional(),
+  speaking_style: z.string().max(200).optional().default(''),
+  language: z.string().max(10).optional().default('th'),
+  temperature: z.coerce.number().min(0).max(2).optional().default(0.7),
+  max_tokens: z.coerce.number().int().min(1).max(8192).optional().default(500),
+});
+
+const qaCreateSchema = z.object({
+  question_pattern: z.string().min(1).max(500),
+  answer: z.string().min(1, 'Answer is required').max(5000),
+  match_type: z.enum(['exact', 'contains', 'regex']).optional().default('contains'),
+  category: z.string().max(100).optional().nullable(),
+  priority: z.coerce.number().int().min(0).max(100).optional().default(0),
+});
 
 export const router = Router();
 
-// ============ Status ============
-router.get('/status', async (_req, res) => {
-  try {
-    const browser = isRunning();
-    const loggedIn = browser ? await isLoggedIn() : false;
-    res.json({
-      browser,
-      loggedIn,
-      chatBot: isChatMonitorActive(),
-      commentBot: isCommentMonitorActive(),
-      uptime: process.uptime(),
-    });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(500).json({ error: msg });
+// ============ Authentication ============
+router.use(authRoutes);
+
+const readWriteGuard = requireReadWriteAuth('viewer');
+
+function isPublicRoute(path: string, method: string): boolean {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod === 'GET' && (path === '/status' || path === '/fb/status')) {
+    return true;
   }
+  if (normalizedMethod === 'POST' && (path === '/chat/reply' || path === '/chat/stream')) {
+    return true;
+  }
+  return false;
+}
+
+router.use((req, res, next) => {
+  if (isPublicRoute(req.path, req.method)) {
+    return next();
+  }
+  return readWriteGuard(req, res, next);
 });
 
-/** Parse a query param as a positive integer, clamped to [min, max] */
-function parseIntParam(value: unknown, defaultVal: number, min = 1, max = 1000): number {
-  const n = parseInt(String(value ?? ''), 10);
-  if (Number.isNaN(n) || n < min) return defaultVal;
-  return Math.min(n, max);
-}
+// ============ Protected Admin Routes ============
+// Apply auth to sensitive endpoints.
+router.use('/fb/login', requireAuth('admin'));
+
+// ============ Status ============
+router.get('/status', asyncHandler(async (_req, res) => {
+  const browser = isRunning();
+  const loggedIn = browser ? await isLoggedIn() : false;
+  res.json({
+    browser,
+    loggedIn,
+    chatBot: isChatMonitorActive(),
+    commentBot: isCommentMonitorActive(),
+    uptime: process.uptime(),
+  });
+}));
 
 // ============ Logs ============
 router.get('/logs', (req, res) => {
@@ -57,88 +115,53 @@ router.get('/logs', (req, res) => {
 });
 
 // ============ Facebook Auth ============
-router.post('/fb/login', async (req, res) => {
+router.post('/fb/login', validateBody(fbLoginSchema), asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const success = await login(email, password);
   res.json({ success });
-});
+}));
 
 router.get('/fb/status', async (req, res) => {
   res.json({ loggedIn: isRunning() ? await isLoggedIn() : false });
 });
 
 // ============ Settings ============
-router.get('/settings', (req, res) => {
-  const rows = dbAll('SELECT * FROM settings');
-  res.json(rows);
-});
-
-router.post('/settings', (req, res) => {
-  try {
-    const { key, value } = req.body;
-    if (key && value !== undefined) {
-      // Single key-value pair
-      setSetting(key, value);
-    } else {
-      // Batch: object of key-value pairs
-      const entries = req.body as Record<string, string>;
-      for (const [k, v] of Object.entries(entries)) {
-        if (k !== 'key' && k !== 'value') setSetting(k, String(v));
-      }
-    }
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
+router.use(settingsRoutes);
 
 // ============ AI Providers ============
-router.get('/ai/test', async (_req, res) => {
-  try {
-    const results = await testAllProviders();
-    res.json(results);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(500).json({ error: msg });
-  }
-});
+router.get('/ai/test', asyncHandler(async (_req, res) => {
+  const results = await testAllProviders();
+  res.json(results);
+}));
 
-router.post('/ai/test', async (req, res) => {
+router.post('/ai/test', validateBody(aiTestSchema), asyncHandler(async (req, res) => {
   const { provider: providerName, apiKey } = req.body;
-  try {
-    // Temporarily set the key if provided
-    if (apiKey) setSetting(`ai_${providerName}_key`, apiKey);
-    const provider = getProvider(providerName as AIProviderType);
-    const success = await provider.testConnection();
-    res.json({ success });
-  } catch (e: any) {
-    res.json({ success: false, error: e.message });
+  if (!getAgentCompatibleProvider(providerName)) {
+    return res.status(400).json({ success: false, error: `Unsupported provider: ${providerName}` });
   }
-});
+  if (apiKey !== undefined) setManagedSetting(`ai_${providerName}_key`, apiKey);
+  const provider = getProvider(providerName);
+  const success = await provider.testConnection();
+  res.json({ success });
+}));
 
-router.post('/ai/models', async (req, res) => {
+router.post('/ai/models', validateBody(aiTestSchema), asyncHandler(async (req, res) => {
   const { provider: providerName, apiKey } = req.body;
-  try {
-    if (apiKey) setSetting(`ai_${providerName}_key`, apiKey);
-    const provider = getProvider(providerName as AIProviderType);
-    const models = await provider.listModels();
-    res.json({ models });
-  } catch (e: any) {
-    res.json({ models: [] });
+  if (!getAgentCompatibleProvider(providerName)) {
+    return res.status(400).json({ success: false, error: `Unsupported provider: ${providerName}` });
   }
-});
+  if (apiKey !== undefined) setManagedSetting(`ai_${providerName}_key`, apiKey);
+  const provider = getProvider(providerName);
+  const models = await provider.listModels();
+  res.json({ models });
+}));
 
-router.post('/ai/generate-post', async (req, res) => {
+router.post('/ai/generate-post', validateBody(generatePostSchema), asyncHandler(async (req, res) => {
   const { topic, style } = req.body;
-  try {
-    const provider = getProviderForTask('content');
-    const messages = buildContentPrompt(topic, style || 'engaging');
-    const result = await provider.chat(messages);
-    res.json({ content: result.text, usage: result.usage });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
+  const messages = buildContentPrompt(topic, style || 'engaging');
+  const result = await aiChat('content', messages);
+  res.json({ content: result.text, usage: result.usage });
+}));
 
 // ============ Personas ============
 router.get('/personas', (req, res) => {
@@ -149,31 +172,30 @@ router.get('/personas/default', (req, res) => {
   res.json(getDefaultPersona());
 });
 
-router.post('/personas', (req, res) => {
+router.post('/personas', validateBody(personaSchema), (req, res) => {
   const { name, description, system_prompt, personality_traits, speaking_style, language, temperature, max_tokens } = req.body;
-  if (!name || !system_prompt) {
-    return res.status(400).json({ error: 'name and system_prompt are required' });
-  }
+
   const id = uuid().slice(0, 8);
   dbRun(`
     INSERT INTO personas (id, name, description, system_prompt, personality_traits, speaking_style, language, temperature, max_tokens)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [id, name, description, system_prompt,
     typeof personality_traits === 'string' ? personality_traits : JSON.stringify(personality_traits),
-    speaking_style, language || 'th', temperature || 0.7, max_tokens || 500
+    speaking_style, language, temperature, max_tokens
   ]);
   res.json({ success: true, id });
 });
 
-router.put('/personas/:id', (req, res) => {
+router.put('/personas/:id', validateBody(personaSchema), (req, res) => {
   const { name, description, system_prompt, personality_traits, speaking_style, language, temperature, max_tokens } = req.body;
+
   dbRun(`
     UPDATE personas SET name=?, description=?, system_prompt=?, personality_traits=?, speaking_style=?,
     language=?, temperature=?, max_tokens=?, updated_at=datetime('now')
     WHERE id=?
   `, [name, description, system_prompt,
     typeof personality_traits === 'string' ? personality_traits : JSON.stringify(personality_traits),
-    speaking_style, language || 'th', temperature || 0.7, max_tokens || 500,
+    speaking_style, language, temperature, max_tokens,
     req.params.id
   ]);
   res.json({ success: true });
@@ -191,12 +213,12 @@ router.delete('/personas/:id', (req, res) => {
 });
 
 // ============================================================
-// Bot Personas — file-based (AGENTS.md / IDENTITY.md / SOUL.md / TOOLS.md)
-// ใช้โดย bot_agents ทั้ง 3 ช่องทาง (fb-extension, line, telegram)
-// แก้ไขได้จาก Dashboard และ Extension UI
+// Bot personas - file-based (AGENTS.md / IDENTITY.md / SOUL.md / TOOLS.md)
+// Used by all bot_agents channels (fb-extension, line, telegram)
+// Editable from Dashboard and Extension UI
 // ============================================================
 
-/** GET /api/bot-personas — รายชื่อ platform ทั้งหมด */
+/** GET /api/bot-personas - list all platforms */
 router.get('/bot-personas', (_req, res) => {
   try {
     const result = PLATFORMS.map(platform => personaManager.readFiles(platform));
@@ -206,7 +228,7 @@ router.get('/bot-personas', (_req, res) => {
   }
 });
 
-/** GET /api/bot-personas/:platform — ดึง files ของ platform นั้น */
+/** GET /api/bot-personas/:platform - read persona files for a platform */
 router.get('/bot-personas/:platform', (req, res) => {
   const platform = req.params.platform as PlatformType;
   if (!PLATFORMS.includes(platform)) {
@@ -219,7 +241,7 @@ router.get('/bot-personas/:platform', (req, res) => {
   }
 });
 
-/** PUT /api/bot-personas/:platform — บันทึก files + clear cache ทันที */
+/** PUT /api/bot-personas/:platform - write files and clear cache immediately */
 router.put('/bot-personas/:platform', (req, res) => {
   const platform = req.params.platform as PlatformType;
   if (!PLATFORMS.includes(platform)) {
@@ -240,12 +262,12 @@ router.put('/bot-personas/:platform', (req, res) => {
 /**
  * Validate Q&A pattern to prevent:
  * 1. Empty/too-short patterns
- * 2. ReDoS (catastrophic backtracking) — check regex compiles in < 50ms
+ * 2. ReDoS (catastrophic backtracking) - check regex compiles in < 50ms
  * 3. Overly long patterns that could be expensive
  */
 function validateQAPattern(pattern: string, matchType: string): { valid: boolean; error?: string } {
-  if (!pattern || pattern.trim().length === 0) return { valid: false, error: 'Question pattern ห้ามว่าง' };
-  if (pattern.length > 500) return { valid: false, error: 'Pattern ยาวเกินไป (max 500 chars)' };
+  if (!pattern || pattern.trim().length === 0) return { valid: false, error: 'Question pattern cannot be empty' };
+  if (pattern.length > 500) return { valid: false, error: 'Pattern too long (max 500 chars)' };
 
   if (matchType === 'regex') {
     try {
@@ -256,7 +278,7 @@ function validateQAPattern(pattern: string, matchType: string): { valid: boolean
       const start = Date.now();
       re.test(testStr);
       const elapsed = Date.now() - start;
-      if (elapsed > 50) return { valid: false, error: 'Regex ช้าเกินไป (อาจเกิด ReDoS)' };
+      if (elapsed > 50) return { valid: false, error: 'Regex is too slow (possible ReDoS risk)' };
     } catch (e: any) {
       return { valid: false, error: `Regex syntax error: ${e.message}` };
     }
@@ -270,17 +292,16 @@ router.get('/qa', (_req, res) => {
   res.json(rows);
 });
 
-router.post('/qa', (req, res) => {
+router.post('/qa', validateBody(qaCreateSchema), (req, res) => {
   const { question_pattern, answer, match_type, category, priority } = req.body;
 
-  // Validate inputs
-  if (!answer || answer.trim().length === 0) return res.status(400).json({ error: 'Answer ห้ามว่าง' });
-  const validation = validateQAPattern(question_pattern, match_type || 'contains');
+  // Additional regex safety check
+  const validation = validateQAPattern(question_pattern, match_type);
   if (!validation.valid) return res.status(400).json({ error: validation.error });
 
   dbRun(
     'INSERT INTO qa_pairs (question_pattern, answer, match_type, category, priority) VALUES (?, ?, ?, ?, ?)',
-    [question_pattern.trim(), answer.trim(), match_type || 'contains', category || null, priority || 0]
+    [question_pattern.trim(), answer.trim(), match_type, category || null, priority]
   );
   const lastRow = dbGet('SELECT last_insert_rowid() as id');
   res.json({ success: true, id: lastRow?.id });
@@ -362,10 +383,20 @@ router.get('/comments/watches', (req, res) => {
 
 router.post('/comments/watches', (req, res) => {
   const { fb_post_url, reply_style, max_replies } = req.body;
-  // Validate required URL
-  if (!fb_post_url || typeof fb_post_url !== 'string' || !fb_post_url.includes('facebook.com')) {
-    return res.status(400).json({ error: 'fb_post_url ต้องเป็น URL ของ Facebook ที่ถูกต้อง' });
+  // Validate required URL using proper URL parsing
+  if (!fb_post_url || typeof fb_post_url !== 'string') {
+    return res.status(400).json({ success: false, error: 'fb_post_url is required and must be a string' });
   }
+
+  try {
+    const urlObj = new URL(fb_post_url);
+    if (!urlObj.hostname.includes('facebook.com')) {
+      return res.status(400).json({ success: false, error: 'fb_post_url must be a valid Facebook URL' });
+    }
+  } catch {
+    return res.status(400).json({ success: false, error: 'fb_post_url must be a valid URL' });
+  }
+
   // Validate optional max_replies
   const safeMaxReplies = Math.max(1, Math.min(parseInt(String(max_replies ?? '50'), 10) || 50, 1000));
   const safeStyle = ['friendly', 'formal', 'casual', 'auto'].includes(reply_style) ? reply_style : 'friendly';
@@ -382,398 +413,261 @@ router.delete('/comments/watches/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ============ Chat Reply (Extension API) — 3-Layer Memory ============
-router.post('/chat/reply', async (req, res) => {
-  const { conversationId, userName, message, messageId } = req.body;
+// ============ Chat Reply (Extension API) - 3-Layer Memory ============
+// ============ Chat ============
+router.use(chatRoutes);
 
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'message is required and must be a string' });
-  }
+// ============ Memory & Conversations ============
+router.use(memoryRoutes);
 
-  if (message.length > 10000) {
-    return res.status(400).json({ error: 'message too long (max 10000 chars)' });
-  }
+// ============ Admin & Ops ============
+router.use(adminRoutes);
 
+// ============ Dynamic Tools ============
+
+// GET /api/dynamic-tools - list all dynamic tools
+router.get('/dynamic-tools', (req, res) => {
   try {
-    const convId = conversationId || 'unknown';
-    const userId = convId; // In Messenger, convId = userId
-
-    // 1. Upsert conversation
-    upsertConversation(convId, userId, userName || 'Unknown');
-
-    // 2. Anti-duplicate Check (Execution BEFORE database save)
-    const priorMsgs = getConversationMessages(convId, 3);
-    if (priorMsgs.length > 0) {
-      const lastMsg = priorMsgs[priorMsgs.length - 1];
-
-      // Case A: Double-send (User/Extension clicked/sent twice rapidly before AI replied)
-      if (lastMsg.role === 'user' && lastMsg.content === message) {
-        addLog('chat', 'Duplicate skip', `Double-send blocked: "${message.substring(0, 40)}"`, 'info');
-        return res.json({ reply: 'Processing or duplicate', duplicate: true });
-      }
-
-      // Case B: Extension loop (AI already replied to this exact content)
-      if (lastMsg.role === 'assistant') {
-        const lastUserMsg = priorMsgs.slice().reverse().find(m => m.role === 'user');
-        if (lastUserMsg && lastUserMsg.content === message) {
-          addLog('chat', 'Duplicate skip', `Already replied to: "${message.substring(0, 40)}"`, 'info');
-          return res.json({ reply: lastMsg.content, source: 'cached', duplicate: true });
-        }
-      }
-    }
-
-    // 3. Save incoming message
-    addMessage(convId, 'user', message, messageId);
-
-    // 3. Check Q&A database first (instant, no AI call)
-    const qaMatch = findQAMatch(message);
-    if (qaMatch) {
-      const reply = qaMatch.answer;
-      addMessage(convId, 'assistant', reply);
-      addLog('chat', 'Q&A match', `"${message.substring(0, 40)}" → "${reply.substring(0, 40)}"`, 'success');
-      return res.json({ reply, source: 'qa' });
-    }
-
-    // 4. Load File-Based Persona (OpenClaw Style)
-    const personaConfig = personaManager.loadPersona('fb-extension');
-
-    // 5. Build Unified Memory context (4 layers)
-    const fbChatId = `fb_${convId}`;
-
-    // Upsert conversation to satisfy SQLite foreign key constraints for unified memory
-    upsertConversation(fbChatId, userId, userName || 'Unknown');
-    umAddMessage(fbChatId, 'user', message); // Save to unified memory
-    const memCtx = await buildMemoryContext(fbChatId, message);
-
-    // 6. Determine which AI provider + model will be used
-    const chatProvider = getProviderForTask('chat');
-    const chatProviderModel = getSetting('ai_task_chat_model') || 'default';
-    console.log(`[Chat] Provider: ${chatProvider.id}, Model: ${chatProviderModel}, Conv: ${convId}, Memory: core=${memCtx.stats.coreBlocks} working=${memCtx.stats.workingMessages} archival=${memCtx.stats.archivalFacts}`);
-    addLog('chat', 'AI call', `Provider: ${chatProvider.id} | Memory: C${memCtx.stats.coreBlocks}/W${memCtx.stats.workingMessages}/A${memCtx.stats.archivalFacts} | ~${memCtx.tokenEstimate}t`, 'info');
-
-    // 7. Build AI messages with unified memory context
-    const aiMessages = buildChatMessages(personaConfig.systemInstruction, {
-      recentMessages: memCtx.workingMessages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      summaryMarkdown: '',
-      userProfileMarkdown: memCtx.coreMemoryText
-    }, message);
-
-    // Inject archival facts into system message if available
-    if (memCtx.archivalFacts.length > 0) {
-      const archivalNote = `\n[Archival Memory]: ${memCtx.archivalFacts.join(' | ')}`;
-      if (aiMessages[0] && aiMessages[0].role === 'system') {
-        aiMessages[0].content += archivalNote;
-      }
-    }
-
-    let aiResult = await aiChat('chat', aiMessages, {
-      temperature: 0.7,
-      maxTokens: 300,
+    const tools = listDynamicTools();
+    res.json({
+      success: true,
+      count: tools.length,
+      tools: tools.map(t => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      })),
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
-    let rawReply = aiResult.text || '';
+// GET /api/dynamic-tools/:name - get a specific dynamic tool
+router.get('/dynamic-tools/:name', (req, res) => {
+  try {
+    const { name } = req.params;
+    const tool = getDynamicTool(name);
+    if (!tool) {
+      return res.status(404).json({ success: false, error: 'Tool not found' });
+    }
+    res.json({
+      success: true,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
-    // 8. Strip <think> tags and reasoning artifacts
-    let reply = stripThinkTags(rawReply);
+// POST /api/dynamic-tools - create a new dynamic tool
+router.post('/dynamic-tools', validateBody(createToolSchema), asyncHandler(async (req, res) => {
+  const { name, description, code, parameters } = req.body;
 
-    // If reply is empty after stripping (likely <think> tags consumed all tokens),
-    // retry with a non-thinking model
-    if (!reply) {
-      const wasThinking = rawReply.includes('<think>') || rawReply.includes('</think>');
-      addLog('chat', 'Empty after strip',
-        `${wasThinking ? 'Think tags ate all tokens' : 'AI returned empty'}. Raw: "${rawReply.substring(0, 80)}" — retrying with non-thinking model`,
-        'warning');
-      try {
-        aiResult = await aiChat('chat', aiMessages, {
-          temperature: 0.7,
-          maxTokens: 300,
-          model: 'gemini-2.0-flash-lite'
-        });
-        rawReply = aiResult.text || '';
-        reply = stripThinkTags(rawReply);
-        if (reply) {
-          addLog('chat', 'Fallback success', `"${reply.substring(0, 50)}"`, 'success');
-        }
-      } catch (fallbackErr: any) {
-        addLog('chat', 'Fallback failed', fallbackErr.message, 'error');
-      }
+  const result = await registerDynamicTool(name, description, code, parameters);
+
+  if (!result.valid) {
+    return res.status(400).json({
+      success: false,
+      errors: result.errors,
+      warnings: result.warnings,
+    });
+  }
+
+  res.json({
+    success: true,
+    message: `Tool '${name}' created successfully`,
+    warnings: result.warnings,
+  });
+}));
+
+// DELETE /api/dynamic-tools/:name - delete a dynamic tool
+router.delete('/dynamic-tools/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+
+    // Check if tool exists
+    const tool = getDynamicTool(name);
+    if (!tool) {
+      return res.status(404).json({ success: false, error: 'Tool not found' });
     }
 
-    if (!reply) {
-      if (rawReply) {
-        addLog('chat', 'Empty reply after stripping', `Raw was: ${rawReply.substring(0, 200)}`, 'warning');
+    const result = await unregisterDynamicTool(name);
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    res.json({ success: true, message: `Tool '${name}' deleted` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/dynamic-tools/:name/test - test-run a dynamic tool
+router.post('/dynamic-tools/:name/test', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { args } = req.body;
+
+    const tool = getDynamicTool(name);
+    if (!tool) {
+      return res.status(404).json({ success: false, error: 'Tool not found' });
+    }
+
+    // Execute the tool with provided arguments
+    const result = await tool.handler(args || {});
+
+    res.json({
+      success: true,
+      name,
+      result,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/dynamic-tools/refresh - hot-reload dynamic tools from disk
+router.post('/dynamic-tools/refresh', async (req, res) => {
+  try {
+    await refreshDynamicTools();
+    const tools = listDynamicTools();
+    res.json({
+      success: true,
+      message: 'Dynamic tools refreshed',
+      count: tools.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============ Agent Routing Config ============
+
+/** GET /api/config - get global routing config */
+router.get('/config', (req, res) => {
+  try {
+    const cfg = configManager.getConfig();
+    const resolvedRoutes: Record<string, any> = {};
+    
+    // If autoRouting is on, include what the system WOULD choose right now
+    for (const tt of Object.values(TaskType)) {
+      const base = cfg.routes[tt];
+      if (cfg.autoRouting) {
+        const resolved = getBestModelForTask(tt as TaskType);
+        resolvedRoutes[tt] = {
+          ...base,
+          resolvedProvider: resolved?.provider || base.active.provider,
+          resolvedModel: resolved?.modelName || base.active.modelName
+        };
       } else {
-        addLog('chat', 'Empty reply from AI', `Provider ${chatProvider.id} returned empty. Check API key and model settings.`, 'error');
+        resolvedRoutes[tt] = base;
       }
-      reply = 'ขอตรวจสอบข้อมูลก่อนนะคะ เดี๋ยวรีบมาแจ้งให้ทราบค่ะ';
     }
 
-    const usage = aiResult.usage;
-
-    // 9. Save AI reply to both old DB and unified memory
-    addMessage(convId, 'assistant', reply);
-    umAddMessage(fbChatId, 'assistant', reply);
-
-    addLog('chat', 'AI reply',
-      `[${userName}] "${message.substring(0, 30)}" → "${reply.substring(0, 30)}"` +
-      (usage ? ` [${usage.totalTokens}t ~${memCtx.tokenEstimate}est]` : ''),
-      'success'
-    );
-
-    return res.json({
-      reply,
-      source: 'ai',
-      provider: chatProvider.id,
-      model: chatProviderModel,
-      usage,
-      memory: {
-        layers: {
-          core: memCtx.stats.coreBlocks,
-          working: memCtx.stats.workingMessages,
-          archival: memCtx.stats.archivalFacts,
-        },
-        tokenEstimate: memCtx.tokenEstimate,
-      },
-    });
-  } catch (e: any) {
-    const errMsg = e?.message || String(e);
-    console.error('[Chat] Reply error:', errMsg);
-    addLog('chat', 'Reply error', errMsg, 'error');
-    return res.status(500).json({ error: errMsg });
-  }
-});
-
-// ============ FB Conversation Memory Info Endpoint ============
-router.get('/memory/fb/:convId', async (req, res) => {
-  try {
-    const convId = req.params.convId;
-    const conv = dbGet<{ fb_user_name: string | null; summary: string; summary_msg_count: number }>('SELECT * FROM conversations WHERE id = ?', [convId]);
-    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-
-    const profile = dbGet<{ facts: string; tags: string; total_messages: number; first_contact: string }>('SELECT * FROM user_profiles WHERE user_id = ?', [convId]);
-    const msgCount = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?', [convId]);
-
     res.json({
-      conversationId: convId,
-      userName: conv.fb_user_name,
-      messageCount: msgCount?.c || 0,
-      summary: conv.summary || '',
-      summaryMsgCount: conv.summary_msg_count || 0,
-      profile: profile ? {
-        facts: (() => { try { return JSON.parse(profile.facts); } catch { return []; } })(),
-        tags: (() => { try { return JSON.parse(profile.tags); } catch { return []; } })(),
-        totalMessages: profile.total_messages,
-        firstContact: profile.first_contact,
-      } : null,
-    });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ============ Clear AI Memory Endpoint ============
-router.delete('/memory/all', async (req, res) => {
-  try {
-    dbRun('DELETE FROM messages');
-    dbRun('DELETE FROM user_profiles');
-    dbRun('DELETE FROM conversations');
-    addLog('system', 'Wiped AI Memory', 'Cleared all conversations, messages, and profiles', 'warning');
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-router.delete('/memory/fb/:convId', async (req, res) => {
-  try {
-    const convId = req.params.convId;
-    dbRun('DELETE FROM messages WHERE conversation_id = ?', [convId]);
-    dbRun('DELETE FROM user_profiles WHERE user_id = ?', [convId]);
-    dbRun('DELETE FROM conversations WHERE id = ?', [convId]);
-    addLog('system', 'Cleared User Memory', `Cleared memory for ID: ${convId}`, 'info');
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-// ============ Conversations ============
-router.get('/conversations', (req, res) => {
-  const rows = dbAll(`
-    SELECT c.*, COUNT(m.id) as message_count
-    FROM conversations c
-    LEFT JOIN messages m ON m.conversation_id = c.id
-    GROUP BY c.id
-    ORDER BY c.last_message_at DESC LIMIT 50
-      `);
-  res.json(rows);
-});
-
-router.get('/conversations/:id/messages', (req, res) => {
-  const limit = parseIntParam(req.query.limit, 50, 1, 500);
-  const rows = dbAll(
-    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT ?',
-    [req.params.id, limit]
-  );
-  res.json(rows.reverse());
-});
-
-// ============ Health Monitoring & Stats ============
-router.get('/health/detailed', (_req, res) => {
-  const memUsage = process.memoryUsage();
-  const dbSize = (() => {
-    try {
-      const row = dbGet<{ size: number }>(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`);
-      return row?.size || 0;
-    } catch { return 0; }
-  })();
-
-  const messageCount      = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM messages');
-  const conversationCount = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM conversations');
-  const episodeCount      = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM episodes');
-  const knowledgeCount    = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM knowledge');
-  const logCount          = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM activity_logs');
-
-  res.json({
-    status: 'ok',
-    uptime: process.uptime(),
-    memory: {
-      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + 'MB',
-      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + 'MB',
-      rss: Math.round(memUsage.rss / 1024 / 1024) + 'MB',
-    },
-    database: {
-      sizeBytes: dbSize,
-      sizeMB: Math.round(dbSize / 1024 / 1024 * 100) / 100,
-      messages: messageCount?.c || 0,
-      conversations: conversationCount?.c || 0,
-      episodes: episodeCount?.c || 0,
-      knowledge: knowledgeCount?.c || 0,
-      logs: logCount?.c || 0,
-    },
-    bots: {
-      browser: isRunning(),
-      chatBot: isChatMonitorActive(),
-      commentBot: isCommentMonitorActive(),
-    },
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// ============ DB Maintenance ============
-router.post('/maintenance/cleanup-logs', (_req, res) => {
-  const cutoffDays = 30;
-  const result = getDb().prepare(`DELETE FROM activity_logs WHERE created_at < datetime('now', '-' || ? || ' days')`).run(cutoffDays);
-  const cleaned = (result as any).changes || 0;
-  addLog('system', 'Log cleanup', `Removed ${cleaned} logs older than ${cutoffDays} days`, 'info');
-  res.json({ success: true, cleaned });
-});
-
-router.post('/maintenance/cleanup-episodes', (_req, res) => {
-  // Keep only last 500 episodes per chat
-  const chatIds = dbAll<{ chat_id: string }>('SELECT DISTINCT chat_id FROM episodes');
-  let totalCleaned = 0;
-  for (const { chat_id } of chatIds) {
-    const countRow = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM episodes WHERE chat_id = ?', [chat_id]);
-    if (countRow && countRow.c > 500) {
-      const excess = countRow.c - 500;
-      dbRun('DELETE FROM episodes WHERE id IN (SELECT id FROM episodes WHERE chat_id = ? ORDER BY id ASC LIMIT ?)', [chat_id, excess]);
-      totalCleaned += excess;
-    }
-  }
-  addLog('system', 'Episode cleanup', `Removed ${totalCleaned} old episodes`, 'info');
-  res.json({ success: true, cleaned: totalCleaned });
-});
-
-// ============================================================
-// 🤖 Agent Monitor API — Real-time agentic telemetry
-// ============================================================
-
-// GET /api/agent/runs — last N agent runs (default 50)
-router.get('/agent/runs', (req, res) => {
-  const limit = parseIntParam(req.query.limit, 50, 1, 100);
-  res.json(getAgentRunHistory().slice(0, limit));
-});
-
-// GET /api/agent/active — currently processing requests
-router.get('/agent/active', (_req, res) => {
-  res.json(getAgentActiveRuns());
-});
-
-// GET /api/agent/stats — aggregate stats
-router.get('/agent/stats', (_req, res) => {
-  const stats = getAgentStats();
-  const mem = process.memoryUsage();
-  res.json({
-    ...stats,
-    uptime: Math.round(process.uptime()),
-    memoryMB: Math.round(mem.rss / 1024 / 1024),
-    heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024),
-  });
-});
-
-// ============================================================
-// 🧠 Memory Viewer API — Browse per-user memory state
-// ============================================================
-
-// GET /api/memory/chats — list of chat IDs with memory activity
-router.get('/memory/chats', (_req, res) => {
-  const db = getDb();
-  try {
-    const chats = db.prepare(`
-      SELECT e.chat_id,
-             COUNT(e.id) as episodeCount,
-             MAX(e.timestamp) as lastSeen
-      FROM episodes e
-      GROUP BY e.chat_id
-      ORDER BY lastSeen DESC
-      LIMIT 50
-    `).all();
-    res.json(chats);
-  } catch {
-    res.json([]);
-  }
-});
-
-// GET /api/memory/:chatId — full memory state for a chat
-router.get('/memory/:chatId', (req, res) => {
-  const { chatId } = req.params;
-  const db = getDb();
-  try {
-    const stats = getMemoryStats(chatId);
-    const coreBlocks = getCoreMemory(chatId);
-    const coreText = formatCoreMemory(coreBlocks);
-    const workingMessages = getWorkingMemory(chatId);
-    const archival = db.prepare(
-      'SELECT id, fact, created_at FROM archival_memory WHERE chat_id = ? ORDER BY created_at DESC LIMIT 30'
-    ).all(chatId) as any[];
-    const episodeCount = (db.prepare('SELECT COUNT(*) as c FROM episodes WHERE chat_id = ?').get(chatId) as any)?.c ?? 0;
-
-    res.json({
-      chatId,
-      stats,
-      core: { text: coreText, blocks: coreBlocks },
-      working: workingMessages,
-      archival,
-      episodeCount,
+      autoRouting: cfg.autoRouting,
+      routes: resolvedRoutes
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE /api/memory/:chatId — clear all memory for a chat
-router.delete('/memory/:chatId', (req, res) => {
-  const { chatId } = req.params;
-  const db = getDb();
+/** POST /api/config - update global routing config */
+router.post('/config', (req, res) => {
   try {
-    db.prepare('DELETE FROM archival_memory WHERE chat_id = ?').run(chatId);
-    db.prepare('DELETE FROM core_memory WHERE chat_id = ?').run(chatId);
-    db.prepare('DELETE FROM episodes WHERE chat_id = ?').run(chatId);
-    addLog('system', 'Memory cleared', chatId, 'info');
-    res.json({ success: true });
+    configManager.updateConfig(req.body);
+    agentEvents.modelUpdated({ isGlobal: true });
+    res.json({ success: true, config: configManager.getConfig() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ============ File Upload & Processing ============
+const upload = multer({
+  dest: config.uploadsDir,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+  fileFilter: (_req, file, cb) => {
+    const ext = '.' + (file.originalname.split('.').pop()?.toLowerCase() || '');
+    const supported = getSupportedExtensions();
+    if (supported.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported file type: ${ext}. Supported: ${supported.join(', ')}`));
+    }
+  },
+});
+
+// POST /api/files/upload - upload and process file for AI consumption
+router.post('/files/upload', upload.single('file'), asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ error: 'No file provided' });
+  }
+
+  // Rename to preserve extension (multer strips it)
+  const ext = '.' + (file.originalname.split('.').pop()?.toLowerCase() || 'bin');
+  const newPath = file.path + ext;
+  const fs = await import('fs');
+  fs.renameSync(file.path, newPath);
+
+  const processed = await processFile(newPath);
+  const geminiPart = fileToGeminiPart(processed);
+
+  res.json({
+    success: true,
+    file: {
+      originalName: processed.originalName,
+      type: processed.type,
+      mimeType: processed.mimeType,
+      sizeKB: processed.sizeKB,
+      hasBase64: !!processed.base64,
+      contentPreview: processed.content.substring(0, 500),
+    },
+    geminiPart: 'inlineData' in geminiPart
+      ? { type: 'inlineData', mimeType: (geminiPart as any).inlineData.mimeType, dataLength: (geminiPart as any).inlineData.data.length }
+      : { type: 'text', textLength: (geminiPart as any).text.length },
+  });
+}));
+
+// POST /api/files/upload-multi - upload multiple files
+router.post('/files/upload-multi', upload.array('files', 10), asyncHandler(async (req, res) => {
+  const files = req.files as Express.Multer.File[];
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: 'No files provided' });
+  }
+
+  const fs = await import('fs');
+  const results = [];
+
+  for (const file of files) {
+    const ext = '.' + (file.originalname.split('.').pop()?.toLowerCase() || 'bin');
+    const newPath = file.path + ext;
+    fs.renameSync(file.path, newPath);
+
+    const processed = await processFile(newPath);
+    results.push({
+      originalName: processed.originalName,
+      type: processed.type,
+      mimeType: processed.mimeType,
+      sizeKB: processed.sizeKB,
+      hasBase64: !!processed.base64,
+      contentPreview: processed.content.substring(0, 200),
+    });
+  }
+
+  res.json({ success: true, files: results, count: results.length });
+}));
+
+// GET /api/files/supported - list supported file types
+router.get('/files/supported', (_req, res) => {
+  res.json({
+    extensions: getSupportedExtensions(),
+    maxSizeMB: 25,
+    maxFiles: 10,
+  });
 });

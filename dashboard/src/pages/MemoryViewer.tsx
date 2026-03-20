@@ -25,13 +25,35 @@ interface ArchivalItem {
   created_at: string;
 }
 
+interface PaginatedArchival {
+  items: ArchivalItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 interface MemoryData {
   chatId: string;
   stats: { workingCount: number; archivalCount: number; coreCount: number };
   core: { text: string; blocks: CoreBlock[] };
   working: MemoryMessage[];
-  archival: ArchivalItem[];
+  archival: PaginatedArchival | ArchivalItem[];
   episodeCount: number;
+}
+
+/** Normalize archival — handles both legacy array and new paginated format */
+function normalizeArchival(archival: PaginatedArchival | ArchivalItem[]): PaginatedArchival {
+  if (Array.isArray(archival)) {
+    return { items: archival, total: archival.length, limit: archival.length, offset: 0 };
+  }
+  return archival;
+}
+
+/** Extract items from paginated or raw array response */
+function extractItems<T>(data: any): T[] {
+  if (Array.isArray(data)) return data;
+  if (data?.items && Array.isArray(data.items)) return data.items;
+  return [];
 }
 
 export function MemoryViewer() {
@@ -44,7 +66,9 @@ export function MemoryViewer() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    api.getMemoryChats().then(setChats).catch(() => {});
+    api.getMemoryChats().then((data) => setChats(extractItems(data))).catch((err) => {
+      console.error('Failed to load memory chats:', err);
+    });
   }, []);
 
   const loadMemory = async (chatId: string) => {
@@ -53,7 +77,10 @@ export function MemoryViewer() {
     try {
       const data = await api.getMemory(chatId);
       setMemory(data);
-    } catch { setMemory(null); }
+    } catch (err) {
+      console.error('Failed to load memory:', err);
+      setMemory(null);
+    }
     finally { setLoading(false); }
   };
 
@@ -65,8 +92,11 @@ export function MemoryViewer() {
       setMemory(null);
       setSelectedChat(null);
       const updated = await api.getMemoryChats();
-      setChats(updated);
-    } catch { alert('ลบไม่สำเร็จ'); }
+      setChats(extractItems(updated));
+    } catch (err) {
+      console.error('Failed to delete memory:', err);
+      alert('ลบไม่สำเร็จ');
+    }
     finally { setDeleting(false); }
   };
 
@@ -129,7 +159,7 @@ export function MemoryViewer() {
           </div>
           <div className="p-2 border-t border-gray-800">
             <button
-              onClick={() => api.getMemoryChats().then(setChats)}
+              onClick={() => api.getMemoryChats().then((data) => setChats(extractItems(data)))}
               className="w-full flex items-center justify-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 py-1.5"
             >
               <RefreshCw className="w-3 h-3" /> Refresh
@@ -161,7 +191,7 @@ export function MemoryViewer() {
                   <div className="flex gap-4 mt-1 text-xs text-gray-500">
                     <span>🧠 Core: {memory.core.blocks.length} blocks</span>
                     <span>💬 Working: {memory.working.length} msgs</span>
-                    <span>📦 Archival: {memory.archival.length} facts</span>
+                    <span>📦 Archival: {normalizeArchival(memory.archival).total} facts</span>
                     <span>📝 Episodes: {memory.episodeCount}</span>
                   </div>
                 </div>
@@ -245,23 +275,33 @@ export function MemoryViewer() {
                   </div>
                 )}
 
-                {activeTab === 'archival' && (
-                  <div className="space-y-2">
-                    {memory.archival.length === 0 ? (
-                      <p className="text-gray-600 text-sm text-center py-8">ยังไม่มี Archival Facts</p>
-                    ) : (
-                      memory.archival.map((item) => (
-                        <div key={item.id} className="flex gap-3 items-start bg-gray-800/40 rounded-lg p-3 border border-gray-700/40">
-                          <Archive className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-gray-200">{item.fact}</p>
-                            <p className="text-[10px] text-gray-600 mt-1">{fmtDate(item.created_at)}</p>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
+                {activeTab === 'archival' && (() => {
+                  const arch = normalizeArchival(memory.archival);
+                  return (
+                    <div className="space-y-2">
+                      {arch.items.length === 0 ? (
+                        <p className="text-gray-600 text-sm text-center py-8">ยังไม่มี Archival Facts</p>
+                      ) : (
+                        <>
+                          {arch.total > arch.items.length && (
+                            <p className="text-xs text-gray-500 text-center">
+                              แสดง {arch.items.length} จาก {arch.total} facts
+                            </p>
+                          )}
+                          {arch.items.map((item) => (
+                            <div key={item.id} className="flex gap-3 items-start bg-gray-800/40 rounded-lg p-3 border border-gray-700/40">
+                              <Archive className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm text-gray-200">{item.fact}</p>
+                                <p className="text-[10px] text-gray-600 mt-1">{fmtDate(item.created_at)}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </>
           )}

@@ -9,6 +9,9 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 import { initDb, upsertConversation } from './database/db.js';
 import { Agent } from './bot_agents/agent.js';
+import { createLogger } from './utils/logger.js';
+
+const logger = createLogger('CLI');
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -17,15 +20,15 @@ const rl = readline.createInterface({
 });
 
 async function main() {
-    console.log('🤖 Initializing CLI Bot...');
+    logger.info('🤖 Initializing CLI Bot...');
     await initDb();
 
     // Use telegram bot's persona for CLI testing
     const botId = 'env-telegram';
     const chatId = 'cli_local_user';
 
-    console.log(`✅ System Ready. Testing with Bot ID: ${botId}`);
-    console.log('💡 Type "exit" or "quit" to stop. Type "clear" to clear console.');
+    logger.info(`✅ System Ready. Testing with Bot ID: ${botId}`);
+    logger.info('💡 Type "exit" or "quit" to stop. Type "clear" to clear console.');
 
     rl.prompt();
 
@@ -68,7 +71,7 @@ async function main() {
             };
 
             // Call internal agent logic
-            console.log('⏳ Thinking...');
+            logger.info('⏳ Thinking...');
             upsertConversation(chatId, 'local', 'CLI User');
             const response = await aiAgent.processMessage(chatId, input, ctx);
 
@@ -76,10 +79,10 @@ async function main() {
             rl.prompt();
 
         } catch (err: any) {
-            console.error(`\n❌ Error: ${err.message}`);
+            logger.error(`❌ Error: ${err.message}`);
             rl.prompt();
         }
     });
 }
 
-main().catch(console.error);
+main().catch(logger.error);
