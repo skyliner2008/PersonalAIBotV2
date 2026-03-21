@@ -20,6 +20,7 @@ import { TaskType, getBestModelForTask, type ModelConfig, type MultiModelConfig 
 import { getAgentCompatibleProvider } from '../providers/agentRuntime.js';
 import { requireReadWriteAuth } from '../utils/auth.js';
 import { agentEvents } from '../utils/socketBroadcast.js';
+import rateLimit from 'express-rate-limit';
 
 export interface BotConfig {
   autoRouting?: boolean;
@@ -28,6 +29,26 @@ export interface BotConfig {
 }
 
 const router = Router();
+
+// General API rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
+});
+
+// Stricter rate limiting for bot toggle (resource intensive)
+const toggleLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // limit each IP to 10 toggle requests per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many bot toggle requests, please wait a minute' },
+});
+
+router.use(apiLimiter);
 router.use(requireReadWriteAuth('viewer'));
 
 /**
@@ -46,25 +67,40 @@ function maskBot<T>(data: T): T {
     return safe;
   };
 
-  if (Array.isArray(data)) return (data as any).map(mask);
-  return mask(data);
+  return Array.isArray(data) ? (data as any).map(mask) : mask(data);
 }
 
 function syncBotConfig(botId: string, config: BotConfig | null | undefined) {
-  if (config && typeof config === 'object') {
-    const { autoRouting, modelOverrides } = config;
-    if (autoRouting !== undefined || modelOverrides !== undefined) {
-      // Create a clean payload object to avoid side effects or reference sharing with the original config
-      const updatePayload: { autoRouting?: boolean; routes?: Record<string, any> } = {};
-      if (autoRouting !== undefined) updatePayload.autoRouting = autoRouting;
-      if (modelOverrides !== undefined) {
-        updatePayload.routes = { ...modelOverrides };
-      }
+  try {
+    if (config && typeof config === 'object') {
+      const { autoRouting, modelOverrides } = config;
+      if (autoRouting !== undefined || modelOverrides !== undefined) {
+        // Create a clean payload object to avoid side effects or reference sharing with the original config
+        const updatePayload: { autoRouting?: boolean; routes?: Record<string, any> } = {};
+        if (autoRouting !== undefined) updatePayload.autoRouting = autoRouting;
+        if (modelOverrides !== undefined) {
+          updatePayload.routes = { ...modelOverrides };
+        }
 
-      configManager.updateBotConfig(botId, updatePayload);
-      agentEvents.modelUpdated({ botId });
+        configManager.updateBotConfig(botId, updatePayload);
+        agentEvents.modelUpdated({ botId });
+      }
     }
+  } catch (error) {
+    console.error(`Error updating bot config for botId ${botId}:`, error);
+    // Potentially re-throw or handle the error in another way,
+    // depending on the desired error handling strategy.
   }
+}
+
+/**
+ * Helper to get merged model config from runtime configManager and bot DB config.
+ */
+function getMergedModelConfig(botId: string, botConfig: BotConfig | null | undefined) {
+  const botRouteCfg = configManager.getBotConfig(botId);
+  const autoRouting = botRouteCfg?.autoRouting ?? botConfig?.autoRouting ?? true;
+  const modelOverrides = botRouteCfg?.routes ?? botConfig?.modelOverrides ?? {};
+  return { autoRouting, modelOverrides };
 }
 
 /**
@@ -72,9 +108,7 @@ function syncBotConfig(botId: string, config: BotConfig | null | undefined) {
  * with runtime config from configManager.
  */
 function getBotEffectiveConfig(bot: any) {
-  const botRouteCfg = configManager.getBotConfig(bot.id);
-  const autoRouting = botRouteCfg?.autoRouting ?? (bot.config as BotConfig)?.autoRouting ?? true;
-  const modelOverrides = botRouteCfg?.routes ?? (bot.config as BotConfig)?.modelOverrides ?? {};
+  const { autoRouting, modelOverrides } = getMergedModelConfig(bot.id, bot.config as BotConfig);
   return { autoRouting, modelOverrides };
 }
 
@@ -82,11 +116,25 @@ function getBotEffectiveConfig(bot: any) {
  * Unified error response handler.
  */
 function handleError(res: Response, err: unknown, context?: string) {
-  const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+  let message = 'An unexpected error occurred.';
+  if (err instanceof Error) {
+    message = err.message;
+  }
+
+  // Sanitize the error message to prevent XSS
+  const sanitizedMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   if (context) {
     console.error(`[BotsRouter] ${context}:`, message);
   }
-  res.status(500).json({ error: message });
+  res.status(500).json({ error: sanitizedMessage });
+}
+
+/**
+ * Validates if the bot ID is alphanumeric, underscore, or hyphen and within length limits.
+ */
+function isValidBotId(id: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(id) && id.length <= 64;
 }
 
 /**
@@ -103,17 +151,18 @@ router.get('/', (req, res) => {
   }
 });
 
+const platforms: BotPlatform[] = ['telegram', 'line', 'facebook', 'discord', 'custom'];
+const platformCredentialFields = platforms.map(p => ({
+  platform: p,
+  credentialFields: getPlatformCredentialFields(p),
+}));
+
 /**
  * GET /api/bots/platforms
  * List supported platforms with their credential fields.
  */
 router.get('/platforms', (_req, res) => {
-  const platforms: BotPlatform[] = ['telegram', 'line', 'facebook', 'discord', 'custom'];
-  const result = platforms.map(p => ({
-    platform: p,
-    credentialFields: getPlatformCredentialFields(p),
-  }));
-  res.json(result);
+  res.json(platformCredentialFields);
 });
 
 /**
@@ -191,7 +240,7 @@ router.delete('/:id', (req, res) => {
  * Toggle bot: if active -> stop, if stopped -> start.
  * Actually starts/stops the bot process, not just DB status.
  */
-router.post('/:id/toggle', (req, res) => {
+router.post('/:id/toggle', toggleLimiter, (req, res) => {
   try {
     const bot = getBot(req.params.id);
     if (!bot) return res.status(404).json({ error: 'Bot not found' });
@@ -201,8 +250,8 @@ router.post('/:id/toggle', (req, res) => {
       const updated = stopBotInstance(bot.id);
       res.json(updated);
     } else {
-      // Start the bot (uses stored Express app reference)
-      const updated = startBotInstance(null, bot.id);
+      // Start the bot (uses Express app reference from request)
+      const updated = startBotInstance(req.app, bot.id);
       if (!updated) {
         return res.status(500).json({ error: 'Failed to start bot - check server logs' });
       }
@@ -252,16 +301,14 @@ router.get('/:id/models', (req, res) => {
     if (!bot) return res.status(404).json({ error: 'Bot not found' });
 
     const globalConfig = configManager.getConfig();
-    const botRouteCfg = configManager.getBotConfig(req.params.id);
-    const botOverrides = botRouteCfg?.routes ?? (bot.config as any)?.modelOverrides ?? {};
-    const autoRouting = botRouteCfg?.autoRouting ?? (bot.config as any)?.autoRouting ?? true;
+    const { autoRouting, modelOverrides } = getMergedModelConfig(bot.id, bot.config as BotConfig);
 
     // Build merged config showing source
     const modelConfig: Record<string, { active: ModelConfig; fallbacks?: ModelConfig[]; source: string; resolvedProvider?: string; resolvedModel?: string }> = {};
     for (const tt of Object.values(TaskType)) {
       let entry: { active: ModelConfig; fallbacks?: ModelConfig[]; source: string };
-      if (botOverrides[tt]?.active) {
-        entry = { ...botOverrides[tt], source: 'bot-override' };
+      if (modelOverrides[tt]?.active) {
+        entry = { ...modelOverrides[tt], source: 'bot-override' };
       } else if (globalConfig.routes[tt]) {
         entry = { ...globalConfig.routes[tt], source: 'global' };
       } else {

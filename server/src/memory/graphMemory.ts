@@ -125,11 +125,17 @@ export function queryGraph(chatId: string, keywords: string[], limit: number = 1
     if (!keywords || keywords.length === 0) return '';
 
     const db = getDb();
-    const normalizedKeywords = keywords.map(k => normalizeLabel(k)).filter(k => k.length > 0);
-    if(normalizedKeywords.length === 0) return '';
+    const validKeywords = keywords.map(k => k.trim()).filter(k => k.length > 0);
+    if (validKeywords.length === 0) return '';
 
-    const likeParams = normalizedKeywords.flatMap(k => [`%${k}%`, `%${k}%`]);
-    const conditions = normalizedKeywords.map(() => `n1.label LIKE ? OR n2.label LIKE ?`).join(' OR ');
+    // Use placeholders for all dynamic parts of the query to prevent SQL injection.
+    // The 'conditions' string itself only contains placeholders and static SQL.
+    const conditions = validKeywords.map(() => `(n1.label LIKE ? OR n2.label LIKE ?)`).join(' OR ');
+    const params = [
+        chatId,
+        ...validKeywords.flatMap(k => [`%${k}%`, `%${k}%`]),
+        limit
+    ];
 
     const rows = db.prepare(`
         SELECT DISTINCT n1.label as subject, e.relationship, n2.label as object
@@ -139,7 +145,7 @@ export function queryGraph(chatId: string, keywords: string[], limit: number = 1
         WHERE e.chat_id = ? AND (${conditions})
         ORDER BY e.created_at DESC
         LIMIT ?
-    `).all(chatId, ...likeParams, limit) as any[];
+    `).all(...params) as any[];
 
     if (rows.length === 0) return '';
 

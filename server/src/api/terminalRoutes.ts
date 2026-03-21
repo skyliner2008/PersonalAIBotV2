@@ -54,13 +54,18 @@ router.post('/execute', async (req: Request, res: Response) => {
   try {
     const { command, platform } = req.body as { command?: string; platform?: string };
     const user = (req as any).user as { username?: string } | undefined;
-    if (!command || typeof command !== 'string') {
-      return res.status(400).json({ error: 'command is required' });
+
+    if (!command || typeof command !== 'string' || command.trim().length === 0) {
+      return res.status(400).json({ error: 'A valid command string is required' });
     }
 
-    const result = await executeCommand(command, platform || 'api', user?.username);
+    // Sanitize input to mitigate command injection risks: remove null bytes and trim whitespace
+    const sanitizedCommand = command.replace(/\0/g, '').trim();
+    const sanitizedPlatform = (typeof platform === 'string' ? platform.trim() : 'api') || 'api';
+
+    const result = await executeCommand(sanitizedCommand, sanitizedPlatform, user?.username);
     if (res.headersSent) return;
-    res.json({ output: result, command });
+    res.json({ output: result, command: sanitizedCommand });
   } catch (err: any) {
     if (res.headersSent) return;
     res.status(500).json({ error: err.message });

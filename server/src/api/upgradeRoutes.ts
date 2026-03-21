@@ -102,6 +102,25 @@ router.get('/proposals/:id/diff', asyncHandler(async (req, res) => {
   }
 }));
 
+// GET /api/upgrade/proposals/:id/log — Get failure compiler log for rejected proposals
+router.get('/proposals/:id/log', asyncHandler(async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (!id) {
+    res.status(400).json({ ok: false, error: 'Missing id' });
+    return;
+  }
+
+  const logDir = path.resolve(process.cwd(), '../data/upgrade_logs');
+  const logFile = path.join(logDir, `proposal_${id}_rejected.log`);
+  
+  if (fs.existsSync(logFile)) {
+    const logContent = fs.readFileSync(logFile, 'utf-8');
+    res.json({ ok: true, log: logContent });
+  } else {
+    res.status(404).json({ ok: false, error: 'Log not found for this proposal' });
+  }
+}));
+
 // POST /api/upgrade/scan — เปิด/ปิด โหมดสแกนต่อเนื่อง (Continuous Scan Toggle)
 router.post('/scan', asyncHandler(async (_req, res) => {
   const rootDir = path.resolve(process.cwd(), 'src');

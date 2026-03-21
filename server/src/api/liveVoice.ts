@@ -25,13 +25,13 @@ interface GeminiListModelsResponse {
 }
 
 function normalizeModelName(name: string): string {
-  const raw = String(name || '').trim();
+  const raw = String(name ?? '').trim();
   if (!raw) return '';
   return raw.startsWith('models/') ? raw : `models/${raw}`;
 }
 
 function parseCandidateModels(): string[] {
-  const configuredCandidates = String(process.env.GEMINI_LIVE_MODEL_CANDIDATES || '')
+  const configuredCandidates = String(process.env.GEMINI_LIVE_MODEL_CANDIDATES ?? '')
     .split(',')
     .map((item) => normalizeModelName(item))
     .filter(Boolean);
@@ -70,12 +70,12 @@ export function chooseLiveModelFromAvailable(
   ));
   if (normalizedAvailable.length === 0) return null;
 
-  for (const candidate of candidateModels) {
-    const normalizedCandidate = normalizeModelName(candidate);
-    if (normalizedAvailable.includes(normalizedCandidate)) {
-      return normalizedCandidate;
-    }
-  }
+  const normalizedCandidates = candidateModels.map((candidate) => normalizeModelName(candidate));
+  const selectedCandidate = normalizedCandidates.find((candidate) =>
+    normalizedAvailable.includes(candidate),
+  );
+
+  if (selectedCandidate) return selectedCandidate;
 
   const ranked = [...normalizedAvailable].sort((a, b) => rankLiveModel(b) - rankLiveModel(a));
   return ranked[0] || null;
@@ -126,8 +126,8 @@ export class LiveVideoClient extends EventEmitter {
     super();
     this.apiKey = apiKey;
     this.model = normalizeModelName(model) || DEFAULT_LIVE_MODEL;
-    this.apiVersion = String(apiVersion || DEFAULT_LIVE_API_VERSION).trim() || DEFAULT_LIVE_API_VERSION;
-    this.systemInstruction = String(systemInstruction || '').trim() || undefined;
+    this.apiVersion = (apiVersion ?? DEFAULT_LIVE_API_VERSION).trim() || DEFAULT_LIVE_API_VERSION;
+    this.systemInstruction = (systemInstruction ?? '').trim() || undefined;
     this.toolDeclarations = Array.isArray(toolDeclarations) ? toolDeclarations : [];
   }
 
@@ -297,15 +297,36 @@ export class LiveVideoClient extends EventEmitter {
       },
     };
     const jsonStr = JSON.stringify(payload).replace(
-      /[\u0080-\uffff]/g,
+      /[€-]/g,
       (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'),
     );
+
+    // Add escaping for HTML special characters to prevent XSS.
+    const escapedJsonStr = jsonStr.replace(/[&<>'"/]/g, (match) => {
+      switch (match) {
+        case '&':
+          return '&amp;';
+        case '<':
+          return '&lt;';
+        case '>':
+          return '&gt;';
+        case '\'':
+          return '&#39;';
+        case '"':
+          return '&quot;';
+        case '/':
+          return '&#x2F;';
+        default:
+          return match;
+      }
+    });
+
     console.log('[LiveVoice] Sending tool response', {
       responseCount: functionResponses.length,
-      payloadLength: jsonStr.length,
+      payloadLength: escapedJsonStr.length,
       firstResponsePreview: JSON.stringify(functionResponses[0]?.response)?.slice(0, 200),
     });
-    this.ws.send(jsonStr);
+    this.ws.send(escapedJsonStr);
   }
 
   private handleMessage(message: any) {

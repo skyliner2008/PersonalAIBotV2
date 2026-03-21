@@ -24,7 +24,7 @@ export function startIdleLoop(aiAgent: Agent | null) {
         log.info(`Started. Checking for inactivity every ${IDLE_CHECK_INTERVAL_MS / 60000} minutes.`);
     }
 
-    setInterval(async () => {
+    idleInterval = setInterval(async () => {
         // Prevent overlapping executions if async callback takes longer than interval
         if (isIdleLoopRunning) {
             log.debug('Still processing from previous interval, skipping');
@@ -85,7 +85,7 @@ async function checkAndTriggerProactiveTask(aiAgent: Agent) {
         return;
     }
 
-    console.log(`[IdleLoop] ⚠️ Bot has been idle for ${hoursSinceLastMessage.toFixed(1)} hours. Triggering Proactive Task...`);
+    log.warn(`Bot has been idle for ${hoursSinceLastMessage.toFixed(1)} hours. Triggering Proactive Task...`);
 
     // We create a special "System" chat session for the bot's internal thoughts
     const systemChatId = 'system_idle_loop';

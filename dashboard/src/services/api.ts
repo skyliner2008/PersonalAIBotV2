@@ -545,4 +545,6 @@ export const api = {
     request('/upgrade/activity', { method: 'POST' }),
   getUpgradeProposalDiff: (id: number) =>
     request(`/upgrade/proposals/${id}/diff`),
+  getUpgradeProposalLog: (id: number) =>
+    request(`/upgrade/proposals/${id}/log`),
 };

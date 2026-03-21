@@ -64,7 +64,7 @@ export class GeminiProvider implements AIProvider {
 
     if (this.isVertexAI) {
       // Vertex AI mode: use OAuth token via httpOptions headers
-      this.ai = new GoogleGenAI({
+      const vertexAiOptions = {
         vertexai: true,
         project: options.project || '',
         location: options.location || 'us-central1',
@@ -75,22 +75,42 @@ export class GeminiProvider implements AIProvider {
         httpOptions: {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         },
-      });
+      };
+      this.ai = new GoogleGenAI(vertexAiOptions);
     } else {
-      this.ai = new GoogleGenAI({ apiKey });
+      this.ai = this.createGenAIClient(apiKey);
     }
+  }
+
+  /** Creates a GoogleGenAI client with common configuration. */
+  private createGenAIClient(apiKey: string, httpOptions?: any): GoogleGenAI {
+    return new GoogleGenAI({ apiKey, ...httpOptions });
   }
 
   /** Get the appropriate client for a model (v1beta or v1) */
   private getClientForModel(modelName: string): GoogleGenAI {
     if (this.isVertexAI) return this.ai; // Vertex AI handles versioning internally
     if (this.v1Models.has(modelName)) {
-      if (!this.aiFallback) {
-        this.aiFallback = new GoogleGenAI({ apiKey: this.apiKey, httpOptions: { apiVersion: 'v1' } });
-      }
-      return this.aiFallback;
+      return this.aiFallback!;
     }
     return this.ai;
+  }
+
+  /** Prepares the content array for v1 retry by adding the system instruction. */
+  private prepareContentsForV1Retry(systemInstruction: string, contents: Content[]): Content[] {
+    return systemInstruction
+      ? [{ role: 'user' as const, parts: [{ text: `[System Instruction]\n${systemInstruction}` }] }, ...contents]
+      : contents;
+  }
+
+  /** Merges tool calls from different sources, eliminating duplicates. */
+  private mergeToolCalls(functionCallsFromApi: ToolCall[], functionCallsFromParts: ToolCall[]): ToolCall[] {
+    const toolCallByKey = new Map<string, ToolCall>();
+    for (const call of [...functionCallsFromApi, ...functionCallsFromParts]) {
+      const key = `${call.name}:${JSON.stringify(call.args || {})}`;
+      if (!toolCallByKey.has(key)) toolCallByKey.set(key, call);
+    }
+    return Array.from(toolCallByKey.values());
   }
 
   async generateResponse(
@@ -134,12 +154,12 @@ export class GeminiProvider implements AIProvider {
         response = await client.models.generateContent(requestPayload);
       } catch (genErr: any) {
         const errMsg = JSON.stringify(genErr?.message || genErr || '');
-        const isModelNotFound = /404|NOT_FOUND|is not found/i.test(errMsg);
-        const isInvalidArgs = /INVALID_ARGUMENT|Unknown name/i.test(errMsg);
+        const modelNotFound = /404|NOT_FOUND|is not found/i.test(errMsg);
+        const invalidArgs = /INVALID_ARGUMENT|Unknown name/i.test(errMsg);
         
         // If model not found or invalid args on current API version, try alternative version
-        if ((isModelNotFound || isInvalidArgs) && !this.v1Models.has(modelName)) {
-          logger.warn(`Model "${modelName}" ${isModelNotFound ? 'not found' : 'invalid args'} on v1beta, retrying with v1 API version...`);
+        if (!this.isVertexAI && (modelNotFound || invalidArgs) && !this.v1Models.has(modelName)) {
+          logger.warn(`Model "${modelName}" ${modelNotFound ? 'not found' : 'invalid args'} on v1beta, retrying with v1 API version...`);
           this.v1Models.add(modelName);
           if (!this.aiFallback) {
             this.aiFallback = new GoogleGenAI({ apiKey: this.apiKey, httpOptions: { apiVersion: 'v1' } });
@@ -154,9 +174,7 @@ export class GeminiProvider implements AIProvider {
               systemInstruction: undefined, // Standardize on stripping for v1 retry
               tools: undefined,
             },
-            contents: systemInstruction
-              ? [{ role: 'user' as const, parts: [{ text: `[System Instruction]\n${systemInstruction}` }] }, ...contents]
-              : contents,
+            contents: this.prepareContentsForV1Retry(systemInstruction, contents),
           };
           
           try {
@@ -222,9 +240,7 @@ export class GeminiProvider implements AIProvider {
         }
       }
 
-      const toolCalls: ToolCall[] | undefined = mergedToolCalls.length > 0
-        ? mergedToolCalls
-        : undefined;
+      const toolCalls: ToolCall[] | undefined = mergedToolCalls.length > 0 ? mergedToolCalls : undefined;
 
       return {
         text: responseText,
@@ -251,9 +267,9 @@ export class GeminiProvider implements AIProvider {
 
       while (pager && guard < 20) {
         guard += 1;
-        const page = pager.page || pager.pageInternal || [];
-        for (const m of page) {
-          const name: string = (m.name || '').replace('models/', '').trim();
+        const modelsPage = pager.page || pager.pageInternal || [];
+        for (const model of modelsPage) {
+          const name: string = (model.name || '').replace('models/', '').trim();
           if (!name) continue;
 
           if (!includeEmbeddings && name.includes('embedding')) continue;
@@ -292,7 +308,12 @@ export class GeminiProvider implements AIProvider {
 
       throw new Error('No models returned from API');
     } catch (err) {
-      console.error('[Gemini ListModels Error]:', err);
+      logger.error('[Gemini ListModels Error]:', err);
+      const errorMessage = (err as any)?.message || String(err);
+      if (errorMessage.includes('authentication') || errorMessage.includes('permission')) {
+        // Handle authentication/permission errors by returning an empty list to avoid misleading fallbacks
+        return [];
+      }
       if (this.options.includeEmbeddingsInList) {
         return [
           'gemini-embedding-001',

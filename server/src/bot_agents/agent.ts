@@ -203,7 +203,7 @@ export class Agent {
         ...this.getFallbackChainFromMd().map(f => ({ provider: f.provider, modelName: f.model }))
       ].filter((v, i, a) => a.findIndex(t => t.provider === v.provider && t.modelName === v.modelName) === i);
 
-      console.log(`[Router] ${taskType} | Mode: ${autoRouting ? 'Adaptive' : 'Manual'} | Choices: ${modelChoicesList.length}`);
+      log.info(`[Router] ${taskType} | Mode: ${autoRouting ? 'Adaptive' : 'Manual'} | Choices: ${modelChoicesList.length}`);
 
       // 2. Build Context
       const memoryCtx = await buildContext(chatId, cleanMessage, { maxArchival: 5, archivalThreshold: 0.55 });

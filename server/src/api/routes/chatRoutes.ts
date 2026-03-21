@@ -111,43 +111,47 @@ chatRoutes.post('/chat/reply', validateBody(chatReplySchema), asyncHandler(async
   let rawReply = aiResult.text || '';
   let reply = stripThinkTags(rawReply);
 
-  // --- FALLBACK LOGIC FOR EMPTY REPLIES (THINKING TAGS ISSUE) ---
-  if (!reply && rawReply) {
+  // Elite Upgrade: Enhanced Empty Response Handling & XSS Sanitization
+  if (!reply || reply.trim().length === 0) {
     const wasThinking = rawReply.includes('<think>') || rawReply.includes('</think>');
     addLog(
       'chat',
       'Empty after strip',
-      `${wasThinking ? 'Think tags ate all tokens' : 'AI returned empty'}. Raw: "${rawReply.substring(0, 80)}" -> retrying with non-thinking model`,
+      `${wasThinking ? 'Think tags consumed all tokens' : 'AI returned empty response'}. Raw length: ${rawReply.length} -> executing fallback to lightweight model`,
       'warning',
     );
+    
     try {
+      // Use a more stable model for fallback to ensure a response is generated
+      const fallbackModel = 'gemini-2.0-flash-lite';
       aiResult = await aiChat('chat', aiMessages, {
         temperature: 0.7,
-        maxTokens: 300,
-        model: 'gemini-2.0-flash-lite',
+        maxTokens: 500,
+        model: fallbackModel,
       });
+      
       rawReply = aiResult.text || '';
       reply = stripThinkTags(rawReply);
-      if (reply) {
-        addLog('chat', 'Fallback success', `"${reply.substring(0, 50)}"`, 'success');
+      
+      if (reply && reply.trim().length > 0) {
+        addLog('chat', 'Fallback recovery successful', `Model: ${fallbackModel}, Snippet: "${reply.substring(0, 50)}..."`, 'success');
       }
     } catch (fallbackErr: any) {
-      addLog('chat', 'Fallback failed', fallbackErr.message, 'error');
+      addLog('chat', 'Fallback recovery failed', fallbackErr.message, 'error');
     }
   }
 
-  if (!reply) {
-    if (rawReply) {
-      addLog('chat', 'Empty reply after stripping', `Raw was: ${rawReply.substring(0, 200)}`, 'warning');
-    } else {
-      addLog('chat', 'Empty reply from AI', `Provider ${chatProvider.id} returned empty. Check API key and model settings.`, 'error');
-    }
-    reply = 'ขอตรวจสอบข้อมูลก่อนนะคะ เดี๋ยวรีบมาแจ้งให้ทราบค่ะ';
+  // Final validation and default response
+  if (!reply || reply.trim().length === 0) {
+    addLog('chat', 'Critical: AI failed to provide content', `Raw: "${rawReply.substring(0, 100)}..."`, 'error');
+    reply = 'ขออภัยค่ะ ระบบขัดข้องเล็กน้อยในการประมวลผลคำตอบนี้ กรุณาลองใหม่อีกครั้งนะคะ';
   }
 
-  // Prevent XSS from AI generated malicious tags
-  reply = reply.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-               .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+  // Security: Sanitize output to prevent XSS from potential AI hallucinations or prompt injections
+  reply = reply
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '[removed script]')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '[removed iframe]')
+    .replace(/on\w+="[^"]*"/gi, ''); // Remove inline event handlers like onclick
 
   const usage = aiResult.usage;
 

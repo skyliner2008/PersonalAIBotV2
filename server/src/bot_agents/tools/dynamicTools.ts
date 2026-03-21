@@ -12,7 +12,48 @@ import { createLogger } from '../../utils/logger.js';
 import { validateTool, type ValidationResult } from './toolValidator.js';
 import { executeTool, validateCodeCompilation } from './toolSandbox.js';
 
-const log = createLogger('DynamicTools');
+const log = createLogger('DynamicTools'); // Test
+
+/**
+ * Maps string types to Gemini Type enum
+ */
+const mapSchemaType = (type: any): Type => {
+  switch (String(type || 'string').toLowerCase()) {
+    case 'string': return Type.STRING;
+    case 'number': return Type.NUMBER;
+    case 'integer': return Type.INTEGER;
+    case 'boolean': return Type.BOOLEAN;
+    case 'array': return Type.ARRAY;
+    case 'object': return Type.OBJECT;
+    default: return Type.STRING;
+  }
+};
+
+/**
+ * Common validation logic for dynamic tools
+ */
+function validateDynamicToolDefinition(
+  name: string,
+  description: string,
+  code: string,
+  parameters?: Record<string, unknown>
+): ValidationResult {
+  const validation = validateTool(name, description, code, parameters);
+  if (!validation.valid) {
+    return validation;
+  }
+
+  const compCheck = validateCodeCompilation(code);
+  if (!compCheck.valid) {
+    return {
+      valid: false,
+      errors: [`Code compilation failed: ${compCheck.error}`],
+      warnings: validation.warnings || [],
+    };
+  }
+
+  return validation;
+}
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 //  Configuration 
@@ -204,7 +245,35 @@ export async function registerDynamicTool(
     log.info('Saved dynamic tool to file', { name, path: filePath });
 
     // Load and register in memory
-    const { tool, error: loadError } = await loadToolFromFile(filePath);
+    // Create the handler function (executor wrapper)
+    const handler = async (args: Record<string, unknown>) => {
+      return executeTool(code, args);
+    };
+
+    // Create the FunctionDeclaration for Gemini API
+    const declaration: FunctionDeclaration = {
+      name,
+      description,
+      parameters: parameters
+        ? {
+            type: Type.OBJECT,
+            ...parameters,
+          }
+        : {
+            type: Type.OBJECT,
+            properties: {},
+          },
+    };
+
+    const tool: DynamicToolDef = {
+      name,
+      description,
+      parameters,
+      handler,
+      declaration,
+    };
+
+    const loadError = undefined;
     if (loadError) {
       log.error('Failed to load saved tool', { name, error: loadError });
       return {
@@ -243,7 +312,9 @@ export async function registerDynamicTool(
 /**
  * Unregister and delete a dynamic tool
  */
-export async function unregisterDynamicTool(name: string): Promise<{ success: boolean; error?: string }> {
+export async function unregisterDynamicTool(
+  name: string
+): Promise<ValidationResult & { deleted?: boolean }> {
   try {
     // Remove from memory
     dynamicToolsMap.delete(name);

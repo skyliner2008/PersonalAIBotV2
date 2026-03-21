@@ -2,6 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Type, FunctionDeclaration } from '@google/genai';
 
+declare global {
+  var onFileWrittenByTool: ((filePath: string) => void) | undefined;
+}
+
 // ============================================================
 // 🔒 Path Security — prevent path traversal & system file access
 // ============================================================
@@ -16,6 +20,22 @@ const BLOCKED_DIRS = [
   /^\/proc/i,
 ];
 const BLOCKED_EXTENSIONS = new Set(['.exe', '.dll', '.sys', '.bat', '.cmd', '.msi', '.scr', '.reg']);
+
+async function executeFileOperation(
+  filePath: string,
+  mode: 'read' | 'write',
+  errorPrefix: string,
+  operation: (resolvedPath: string) => string | Promise<string>
+): Promise<string> {
+  const resolvedPath = path.resolve(filePath);
+  const check = validateFilePath(filePath, mode, resolvedPath);
+  if (!check.safe) return check.reason!;
+  try {
+    return await operation(resolvedPath);
+  } catch (error: any) {
+    return `${errorPrefix}: ${error.message}`;
+  }
+}
 
 function validateFilePath(filePath: string, mode: 'read' | 'write' = 'write'): { safe: boolean; reason?: string } {
   const resolved = path.resolve(filePath);
@@ -69,7 +89,7 @@ export async function listFiles({ directory_path }: { directory_path: string }):
   if (!check.safe) return check.reason!;
   try {
     const resolvedPath = path.resolve(directory_path);
-    const files = fs.readdirSync(resolvedPath);
+    const files = await fs.promises.readdir(resolvedPath);
     return `รายชื่อไฟล์ใน ${resolvedPath}:\n${files.join('\n')}`;
   } catch (error: any) {
     return `ไม่สามารถอ่านไดเรกทอรีได้: ${error.message}`;
@@ -95,7 +115,7 @@ export const readFileContentDeclaration: FunctionDeclaration = {
 };
 
 export async function readFileContent({ file_path }: { file_path: string }): Promise<string> {
-  const check = validateFilePath(file_path, 'read');
+  const check = validateFilePath(file_path, 'read'); // updated
   if (!check.safe) return check.reason!;
   try {
     const resolvedPath = path.resolve(file_path);

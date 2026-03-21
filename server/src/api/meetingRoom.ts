@@ -456,7 +456,7 @@ export async function runMeetingRoom(opts: MeetingRoomOptions): Promise<string> 
   // Clear previous steps
   socket.emit('voice:meeting_step', { step: null, status: 'clear', ts: Date.now() });
 
-  // ── Phase 1: Jarvis decomposes task ──
+  // ── Phase 1: Decomposition ──
   emitStep(socket, '👑 Jarvis กำลังวิเคราะห์โจทย์...');
   socket.emit('voice:meeting_status', { phase: 'planning', message: '👑 Jarvis กำลังวิเคราะห์โจทย์และแบ่งงาน...' });
   socket.emit('voice:agent_reply', { input: message, reply: '👑 Jarvis กำลังวิเคราะห์โจทย์และแบ่งงาน...' });

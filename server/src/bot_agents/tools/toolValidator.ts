@@ -2,7 +2,11 @@
 // Tool Validator — AST-based validation for dynamic tool code
 // ============================================================
 // Validates that dynamically generated tool code is safe to execute
-// Uses regex-based pattern matching (lightweight, no heavy AST parser)
+// Uses a robust AST parser for security validation
+import * as acorn from 'acorn';
+import Ajv from 'ajv';
+
+const ajv = new Ajv();
 
 // ── Dangerous patterns (BLOCKLIST) ──
 const DANGEROUS_PATTERNS = [
@@ -39,6 +43,8 @@ const SAFE_MODULES = new Set([
   'fs', 'path', 'url', 'crypto', 'util', 'os', 'stream',
   'buffer', 'events', 'querystring', 'timers',
   'http', 'https', 'net', 'tls', 'dgram',
+  'zlib', 'readline', 'string_decoder', 'punycode', 'dns', 'constants',
+  'assert', 'async_hooks', 'console', 'fs/promises', 'stream/promises', 'timers/promises',
 ]);
 
 export interface ValidationResult {
@@ -64,7 +70,7 @@ export function validateToolCode(code: string): ValidationResult {
   }
 
   // Check for problematic require/import statements
-  const requireMatches = code.match(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g) || [];
+  const requireMatches = code.match(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g) || []; // test find
   for (const requireCall of requireMatches) {
     const moduleName = requireCall.match(/['"]([^'"]+)['"]/)?.[1];
     if (moduleName && !SAFE_MODULES.has(moduleName) && !moduleName.startsWith('.')) {

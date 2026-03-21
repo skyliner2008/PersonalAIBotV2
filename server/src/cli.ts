@@ -40,7 +40,7 @@ async function main() {
         }
 
         if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
-            console.log('👋 Goodbye!');
+            logger.info('👋 Goodbye!');
             process.exit(0);
         }
 

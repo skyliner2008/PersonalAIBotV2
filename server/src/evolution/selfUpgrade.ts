@@ -842,6 +842,19 @@ ${originalContent}
     const swarmCoordinator = getSwarmCoordinator();
     const sortedSpecs = getSortedImplementationSpecialists(swarmCoordinator);
 
+    // ── Boot Guardian Tracker ──
+    const historyDir = path.resolve(rootDir, '../data/upgrade_history');
+    if (!fs.existsSync(historyDir)) fs.mkdirSync(historyDir, { recursive: true });
+    
+    // Save the "Clean" state before the AI touches it
+    fs.writeFileSync(path.join(historyDir, `proposal_${id}_before.txt`), originalContent, 'utf-8');
+    // Drop the breadcrumb for Boot Guardian in case the process is killed shortly after
+    fs.writeFileSync(path.join(historyDir, 'latest_upgrade.json'), JSON.stringify({
+      id,
+      filePath: fullPath,
+      timestamp: Date.now()
+    }), 'utf-8');
+
     let lastError = '';
     for (const specialistName of sortedSpecs) {
       log.info(`Attempting implementation of proposal #${proposal.id} using ${specialistName}...`);
@@ -1046,21 +1059,21 @@ async function learnFromResults(): Promise<number> {
   let learningsAdded = 0;
   const db = getDb();
   
-  // 1. Analyze rejected proposals
-  const rejected = db.prepare(`SELECT * FROM upgrade_proposals WHERE status = 'rejected' LIMIT 5`).all() as UpgradeProposal[];
+  // 1. Analyze rejected proposals (only unreviewed ones)
+  const rejected = db.prepare(`SELECT * FROM upgrade_proposals WHERE status = 'rejected' AND reviewed_at IS NULL LIMIT 5`).all() as UpgradeProposal[];
   for (const p of rejected) {
     addLearning('error_solutions', `Auto-implement failed for pattern: ${p.title}. Reason: ${p.description}`, 'self_upgrade', 0.8);
-    // Mark as reviewed so we don't process it again for learning
-    db.prepare(`UPDATE upgrade_proposals SET status = 'failed', priority = 'low', confidence = confidence - 0.2 WHERE id = ?`).run(p.id);
+    // Mark as reviewed so we don't process it again for learning, but preserve its 'rejected' status so it remains visible in the Dashboard 
+    db.prepare(`UPDATE upgrade_proposals SET reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(p.id);
     learningsAdded++;
   }
   
-  // 2. Analyze implemented proposals
-  const implemented = db.prepare(`SELECT * FROM upgrade_proposals WHERE status = 'implemented' LIMIT 5`).all() as UpgradeProposal[];
+  // 2. Analyze implemented proposals (only unreviewed ones)
+  const implemented = db.prepare(`SELECT * FROM upgrade_proposals WHERE status = 'implemented' AND reviewed_at IS NULL LIMIT 5`).all() as UpgradeProposal[];
   for (const p of implemented) {
     addLearning('performance', `Successfully auto-implemented pattern: ${p.title}`, 'self_upgrade', 0.9);
-    // Mark as archived or leave it, maybe just decrease confidence so it's not processed again or we don't need to do anything.
-    // Actually, just delete or keep.
+    // Mark as reviewed to avoid duplicate learning loops
+    db.prepare(`UPDATE upgrade_proposals SET reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(p.id);
     learningsAdded++;
   }
   

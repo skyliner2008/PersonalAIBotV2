@@ -156,216 +156,237 @@ export function getSystemToolHandlers(sysCtx: SystemToolContext): ToolHandlerMap
 // ── Handler Implementations ──────────────────────────────────
 
 async function handleGetMyConfig({ ctx, getProviderNames }: SystemToolContext) {
-  const bot = getBot(ctx.botId);
-  const globalConfig = configManager.getConfig();
-  const botConfig = (bot?.config as any) ?? {};
-  const botOverrides = botConfig.modelOverrides ?? {};
-  const botAuto = botConfig.autoRouting;
+  try {
+    const bot = getBot(ctx.botId);
+    const globalConfig = configManager.getConfig();
+    const botConfig = (bot?.config as any) ?? {};
+    const botOverrides = botConfig.modelOverrides ?? {};
+    const botAuto = botConfig.autoRouting;
 
-  // Build model config per task type (bot override → global)
-  const modelConfig: Record<string, { provider: string; modelName: string; source: string }> = {};
-  for (const tt of Object.values(TaskType)) {
-    const route = botOverrides[tt] || globalConfig.routes[tt];
-    if (route) {
-      const active = route.active || route;
-      modelConfig[tt] = { 
-        provider: active.provider, 
-        modelName: active.modelName, 
-        source: botOverrides[tt] ? 'bot-override' : 'global' 
-      };
+    // Build model config per task type (bot override → global)
+    const modelConfig: Record<string, { provider: string; modelName: string; source: string }> = {};
+    for (const tt of Object.values(TaskType)) {
+      const route = botOverrides[tt] || globalConfig.routes[tt];
+      if (route) {
+        const active = route.active || route;
+        modelConfig[tt] = { 
+          provider: active.provider, 
+          modelName: active.modelName, 
+          source: botOverrides[tt] ? 'bot-override' : 'global' 
+        };
+      }
     }
+
+    const result = {
+      botId: ctx.botId,
+      botName: ctx.botName,
+      platform: ctx.platform,
+      persona: bot?.persona_id ?? 'default',
+      autoRouting: botAuto !== undefined ? botAuto : globalConfig.autoRouting,
+      globalAutoRouting: globalConfig.autoRouting,
+      enabledToolsCount: bot?.enabled_tools?.length ?? 0,
+      availableProviders: getProviderNames(),
+      modelConfig,
+      status: bot?.status ?? 'unknown',
+    };
+
+    return `🤖 ข้อมูล Config ของฉัน:\n${JSON.stringify(result, null, 2)}`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการดึง Config: ${error.message}`;
   }
-
-  const result = {
-    botId: ctx.botId,
-    botName: ctx.botName,
-    platform: ctx.platform,
-    persona: bot?.persona_id ?? 'default',
-    autoRouting: botAuto !== undefined ? botAuto : globalConfig.autoRouting,
-    globalAutoRouting: globalConfig.autoRouting,
-    enabledToolsCount: bot?.enabled_tools?.length ?? 0,
-    availableProviders: getProviderNames(),
-    modelConfig,
-    status: bot?.status ?? 'unknown',
-  };
-
-  return `🤖 ข้อมูล Config ของฉัน:\n${JSON.stringify(result, null, 2)}`;
 }
 
 async function handleListAvailableModels({ listModels, getProviderNames }: SystemToolContext, args: any) {
-  const filterProvider = args?.provider as string | undefined;
-  const providers = filterProvider ? [filterProvider] : getProviderNames();
-  const result: Record<string, string[]> = {};
+  try {
+    const filterProvider = args?.provider as string | undefined;
+    const providers = filterProvider ? [filterProvider] : getProviderNames();
+    const result: Record<string, string[]> = {};
 
-  for (const providerName of providers) {
-    try {
-      const models = await listModels(providerName);
-      result[providerName] = models;
-    } catch (err: any) {
-      result[providerName] = [`❌ Error: ${err.message}`];
+    for (const providerName of providers) {
+      try {
+        const models = await listModels(providerName);
+        result[providerName] = models;
+      } catch (err: any) {
+        result[providerName] = [`❌ Error: ${err.message}`];
+      }
     }
-  }
 
-  let output = '📋 AI Models ที่ใช้ได้ในระบบ:\n';
-  for (const [provider, models] of Object.entries(result)) {
-    output += `\n🔹 ${provider.toUpperCase()} (${models.length} models):\n`;
-    output += models.map(m => `  • ${m}`).join('\n');
-  }
+    let output = '📋 AI Models ที่ใช้ได้ในระบบ:\n';
+    for (const [provider, models] of Object.entries(result)) {
+      output += `\n🔹 ${provider.toUpperCase()} (${models.length} models):\n`;
+      output += models.map(m => `  • ${m}`).join('\n');
+    }
 
-  return output;
+    return output;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการดึงรายการโมเดล: ${error.message}`;
+  }
 }
 
 async function handleSetMyModel({ ctx, listModels, getProviderNames }: SystemToolContext, args: any) {
-  const taskType = String(args.task_type) as TaskType;
-  const provider = args.provider ? String(args.provider) : undefined;
-  const modelName = args.model_name ? String(args.model_name) : undefined;
-  const auto = args.auto !== undefined ? !!args.auto : undefined;
+  try {
+    const taskType = String(args.task_type) as TaskType;
+    const provider = args.provider ? String(args.provider) : undefined;
+    const modelName = args.model_name ? String(args.model_name) : undefined;
+    const auto = args.auto !== undefined ? !!args.auto : undefined;
 
-  // Validate task type
-  if (!Object.values(TaskType).includes(taskType)) {
-    return `❌ task_type ไม่ถูกต้อง ต้องเป็น: ${Object.values(TaskType).join(', ')}`;
-  }
-
-  if (auto === undefined && (!provider || !modelName)) {
-    return `❌ กรุณาระบุ provider และ model_name หรือตั้งค่า auto=true`;
-  }
-
-  // If manual mode, validate provider
-  if (provider) {
-    const availableProviders = getProviderNames();
-    if (!availableProviders.includes(provider)) {
-      return `❌ provider ไม่ถูกต้อง ต้องเป็นหนึ่งใน: ${availableProviders.join(', ')}`;
+    // Validate task type
+    if (!Object.values(TaskType).includes(taskType)) {
+      return `❌ task_type ไม่ถูกต้อง ต้องเป็น: ${Object.values(TaskType).join(', ')}`;
     }
 
-    // Validate model exists (optional check)
-    try {
-      const models = await listModels(provider);
-      if (models.length > 0 && modelName && !models.includes(modelName)) {
-        return `❌ ไม่พบ model "${modelName}" ใน ${provider}\nModels ที่ใช้ได้: ${models.slice(0, 10).join(', ')}`;
+    if (auto === undefined && (!provider || !modelName)) {
+      return `❌ กรุณาระบุ provider และ model_name หรือตั้งค่า auto=true`;
+    }
+
+    // If manual mode, validate provider
+    if (provider) {
+      const availableProviders = getProviderNames();
+      if (!availableProviders.includes(provider)) {
+        return `❌ provider ไม่ถูกต้อง ต้องเป็นหนึ่งใน: ${availableProviders.join(', ')}`;
       }
-    } catch { /* ignore */ }
-  }
 
-  // Case 1: Jarvis (Global Config)
-  if (ctx.botId === 'jarvis' || !getBot(ctx.botId)) {
-    const config = configManager.getConfig();
+      // Validate model exists (optional check)
+      try {
+        const models = await listModels(provider);
+        if (models.length > 0 && modelName && !models.includes(modelName)) {
+          return `❌ ไม่พบ model "${modelName}" ใน ${provider}\nModels ที่ใช้ได้: ${models.slice(0, 10).join(', ')}`;
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Case 1: Jarvis (Global Config)
+    if (ctx.botId === 'jarvis' || !getBot(ctx.botId)) {
+      const config = configManager.getConfig();
+      if (auto !== undefined) {
+        config.autoRouting = auto;
+      }
+      if (provider && modelName) {
+        config.routes[taskType] = { active: { provider: provider as any, modelName } };
+      }
+      configManager.updateConfig(config);
+      return `✅ อัปเดต Global Config (Jarvis) สำเร็จ!\n` +
+        `📌 Task: ${taskType}\n` +
+        (auto !== undefined ? `🔄 Auto Routing: ${auto ? 'เปิด' : 'ปิด'}\n` : '') +
+        (provider ? `🔄 Model: ${provider}/${modelName}\n` : '') +
+        `💡 มีผลต่อ Agent ทุกตัวที่ใช้ค่า Global`;
+    }
+
+    // Case 2: Specific Bot (LINE/Telegram)
+    const bot = getBot(ctx.botId)!;
+    const currentConfig = (bot.config ?? {}) as any;
+    
     if (auto !== undefined) {
-      config.autoRouting = auto;
+      currentConfig.autoRouting = auto;
     }
+    
     if (provider && modelName) {
-      config.routes[taskType] = { active: { provider: provider as any, modelName } };
+      const modelOverrides = currentConfig.modelOverrides ?? {};
+      modelOverrides[taskType] = { provider: provider as any, modelName };
+      currentConfig.modelOverrides = modelOverrides;
     }
-    configManager.updateConfig(config);
-    return `✅ อัปเดต Global Config (Jarvis) สำเร็จ!\n` +
+
+    updateBot(ctx.botId, { config: currentConfig });
+
+    return `✅ เปลี่ยน model ของบอท "${ctx.botName}" สำเร็จ!\n` +
       `📌 Task: ${taskType}\n` +
       (auto !== undefined ? `🔄 Auto Routing: ${auto ? 'เปิด' : 'ปิด'}\n` : '') +
       (provider ? `🔄 Model: ${provider}/${modelName}\n` : '') +
-      `💡 มีผลต่อ Agent ทุกตัวที่ใช้ค่า Global`;
+      `💡 การเปลี่ยนจะมีผลตั้งแต่ข้อความถัดไป`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการตั้งค่าโมเดล: ${error.message}`;
   }
-
-  // Case 2: Specific Bot (LINE/Telegram)
-  const bot = getBot(ctx.botId)!;
-  const currentConfig = (bot.config ?? {}) as any;
-  
-  if (auto !== undefined) {
-    currentConfig.autoRouting = auto;
-  }
-  
-  if (provider && modelName) {
-    const modelOverrides = currentConfig.modelOverrides ?? {};
-    modelOverrides[taskType] = { provider: provider as any, modelName };
-    currentConfig.modelOverrides = modelOverrides;
-  }
-
-  updateBot(ctx.botId, { config: currentConfig });
-
-  return `✅ เปลี่ยน model ของบอท "${ctx.botName}" สำเร็จ!\n` +
-    `📌 Task: ${taskType}\n` +
-    (auto !== undefined ? `🔄 Auto Routing: ${auto ? 'เปิด' : 'ปิด'}\n` : '') +
-    (provider ? `🔄 Model: ${provider}/${modelName}\n` : '') +
-    `💡 การเปลี่ยนจะมีผลตั้งแต่ข้อความถัดไป`;
 }
 
 async function handleGetSystemStatus({ listModels, getProviderNames }: SystemToolContext) {
-  const uptimeSeconds = Math.floor(process.uptime());
-  const hours = Math.floor(uptimeSeconds / 3600);
-  const mins = Math.floor((uptimeSeconds % 3600) / 60);
+  try {
+    const uptimeSeconds = Math.floor(process.uptime());
+    const hours = Math.floor(uptimeSeconds / 3600);
+    const mins = Math.floor((uptimeSeconds % 3600) / 60);
 
-  // Check available providers
-  const providerStatus: Record<string, string> = {};
-  for (const p of getProviderNames()) {
-    try {
-      const models = await listModels(p);
-      providerStatus[p] = `✅ Active (${models.length} models)`;
-    } catch {
-      providerStatus[p] = '❌ Unavailable';
+    // Check available providers
+    const providerStatus: Record<string, string> = {};
+    for (const p of getProviderNames()) {
+      try {
+        const models = await listModels(p);
+        providerStatus[p] = `✅ Active (${models.length} models)`;
+      } catch {
+        providerStatus[p] = '❌ Unavailable';
+      }
     }
+
+    // Memory usage
+    const mem = process.memoryUsage();
+    const memMB = {
+      rss: Math.round(mem.rss / 1024 / 1024),
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+    };
+
+    // Agent stats
+    const agentStats = getAgentStats();
+
+    const result = {
+      uptime: `${hours}h ${mins}m`,
+      providers: providerStatus,
+      memory: `${memMB.heapUsed}MB / ${memMB.heapTotal}MB (RSS: ${memMB.rss}MB)`,
+      agentStats: {
+        totalRuns: agentStats.totalRuns,
+        activeRuns: agentStats.activeRuns,
+        avgDuration: `${agentStats.avgDurationMs}ms`,
+        avgTokens: agentStats.avgTokens,
+        totalToolCalls: agentStats.totalToolCalls,
+      },
+      nodeVersion: process.version,
+    };
+
+    return `📊 สถานะระบบ:\n${JSON.stringify(result, null, 2)}`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการดึงสถานะระบบ: ${error.message}`;
   }
-
-  // Memory usage
-  const mem = process.memoryUsage();
-  const memMB = {
-    rss: Math.round(mem.rss / 1024 / 1024),
-    heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
-    heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
-  };
-
-  // Agent stats
-  const agentStats = getAgentStats();
-
-  const result = {
-    uptime: `${hours}h ${mins}m`,
-    providers: providerStatus,
-    memory: `${memMB.heapUsed}MB / ${memMB.heapTotal}MB (RSS: ${memMB.rss}MB)`,
-    agentStats: {
-      totalRuns: agentStats.totalRuns,
-      activeRuns: agentStats.activeRuns,
-      avgDuration: `${agentStats.avgDurationMs}ms`,
-      avgTokens: agentStats.avgTokens,
-      totalToolCalls: agentStats.totalToolCalls,
-    },
-    nodeVersion: process.version,
-  };
-
-  return `📊 สถานะระบบ:\n${JSON.stringify(result, null, 2)}`;
 }
 
 async function handleGetMyCapabilities({ ctx }: SystemToolContext) {
-  const bot = getBot(ctx.botId);
-  const enabledToolNames = bot?.enabled_tools ?? [];
-  const allTools = getAllTools();
+  try {
+    const bot = getBot(ctx.botId);
+    const enabledToolNames = bot?.enabled_tools ?? [];
+    const allTools = getAllTools();
 
-  // Group enabled tools by category
-  const grouped: Record<string, ToolMeta[]> = {};
-  for (const tool of allTools) {
-    if (enabledToolNames.includes(tool.name)) {
-      if (!grouped[tool.category]) grouped[tool.category] = [];
-      grouped[tool.category].push(tool);
+    // Group enabled tools by category
+    const grouped: Record<string, ToolMeta[]> = {};
+    for (const tool of allTools) {
+      if (enabledToolNames.includes(tool.name)) {
+        if (!grouped[tool.category]) grouped[tool.category] = [];
+        grouped[tool.category].push(tool);
+      }
     }
-  }
 
-  const categoryEmojis: Record<string, string> = {
-    utility: '🔧', os: '💻', file: '📁', browser: '🌐',
-    web: '🔍', memory: '🧠', communication: '💬', system: '⚙️',
-  };
+    const categoryEmojis: Record<string, string> = {
+      utility: '🔧', os: '💻', file: '📁', browser: '🌐',
+      web: '🔍', memory: '🧠', communication: '💬', system: '⚙️',
+    };
 
-  let output = `🤖 ความสามารถของ ${ctx.botName}:\n`;
-  output += `Platform: ${ctx.platform} | Tools: ${enabledToolNames.length}/${allTools.length}\n\n`;
+    let output = `🤖 ความสามารถของ ${ctx.botName}:\n`;
+    output += `Platform: ${ctx.platform} | Tools: ${enabledToolNames.length}/${allTools.length}\n\n`;
 
-  for (const [category, tools] of Object.entries(grouped)) {
-    const emoji = categoryEmojis[category] || '📦';
-    output += `${emoji} ${category.toUpperCase()} (${tools.length}):\n`;
-    for (const tool of tools) {
-      output += `  • ${tool.displayName}: ${tool.description}\n`;
+    for (const [category, tools] of Object.entries(grouped)) {
+      const emoji = categoryEmojis[category] || '📦';
+      output += `${emoji} ${category.toUpperCase()} (${tools.length}):\n`;
+      for (const tool of tools) {
+        output += `  • ${tool.displayName}: ${tool.description}\n`;
+      }
+      output += '\n';
     }
-    output += '\n';
-  }
 
-  return output;
+    return output;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการดึงข้อมูลความสามารถ: ${error.message}`;
+  }
 }
 
 async function handleHelp() {
-  return `📖 คู่มือการใช้งาน AI Agent
+  try {
+    return `📖 คู่มือการใช้งาน AI Agent
 
 🤖 ฉันเป็น Personal AI Agent ที่ทำงานหลายขั้นตอนได้ด้วยตัวเอง
 
@@ -403,98 +424,113 @@ async function handleHelp() {
 💡 ใช้ get_my_config เพื่อดู model แต่ละประเภท
 💡 ใช้ set_my_model เพื่อเปลี่ยน model ตามต้องการ
 💡 ใช้ set_my_model(auto=true) เพื่อให้ระบบเลือก model อัตโนมัติ`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการแสดงคู่มือ: ${error.message}`;
+  }
 }
 
 async function handleGetRecentErrors(args: any) {
-  const limit = Number(args?.limit) || 10;
-  const runs = getAgentRunHistory();
-  const errors = runs.filter((r: any) => r.error).slice(0, limit);
+  try {
+    const limit = Number(args?.limit) || 10;
+    const runs = getAgentRunHistory();
+    const errors = runs.filter((r: any) => r.error).slice(0, limit);
 
-  if (errors.length === 0) {
-    return '✅ ไม่พบข้อผิดพลาดล่าสุด ระบบทำงานปกติ';
+    if (errors.length === 0) {
+      return '✅ ไม่พบข้อผิดพลาดล่าสุด ระบบทำงานปกติ';
+    }
+
+    let output = `⚠️ ข้อผิดพลาดล่าสุด (${errors.length} รายการ):\n\n`;
+    for (const run of errors) {
+      const time = new Date(run.startTime).toLocaleString('th-TH');
+      output += `🔴 ${time}\n`;
+      output += `  Task: ${run.taskType} | Turns: ${run.turns}\n`;
+      output += `  Error: ${run.error}\n`;
+      output += `  Message: "${run.message}"\n\n`;
+    }
+
+    return output;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการดึงประวัติข้อผิดพลาด: ${error.message}`;
   }
-
-  let output = `⚠️ ข้อผิดพลาดล่าสุด (${errors.length} รายการ):\n\n`;
-  for (const run of errors) {
-    const time = new Date(run.startTime).toLocaleString('th-TH');
-    output += `🔴 ${time}\n`;
-    output += `  Task: ${run.taskType} | Turns: ${run.turns}\n`;
-    output += `  Error: ${run.error}\n`;
-    output += `  Message: "${run.message}"\n\n`;
-  }
-
-  return output;
 }
 
 async function handleGetSessionStats() {
-  const stats = getAgentStats();
-  const runs = getAgentRunHistory();
-  const recentRuns = runs.slice(0, 20);
+  try {
+    const stats = getAgentStats();
+    const runs = getAgentRunHistory();
+    const recentRuns = runs.slice(0, 20);
 
-  // Calculate per-task-type stats
-  const taskTypeStats: Record<string, { count: number; avgTokens: number; avgDuration: number }> = {};
-  for (const run of runs) {
-    const tt = run.taskType || 'unknown';
-    if (!taskTypeStats[tt]) taskTypeStats[tt] = { count: 0, avgTokens: 0, avgDuration: 0 };
-    taskTypeStats[tt].count++;
-    taskTypeStats[tt].avgTokens += run.totalTokens;
-    taskTypeStats[tt].avgDuration += run.durationMs || 0;
-  }
-  for (const tt of Object.keys(taskTypeStats)) {
-    const s = taskTypeStats[tt];
-    s.avgTokens = Math.round(s.avgTokens / s.count);
-    s.avgDuration = Math.round(s.avgDuration / s.count);
-  }
-
-  // Tool usage frequency
-  const toolUsage: Record<string, number> = {};
-  for (const run of runs) {
-    for (const tc of run.toolCalls) {
-      toolUsage[tc.name] = (toolUsage[tc.name] || 0) + 1;
+    // Calculate per-task-type stats
+    const taskTypeStats: Record<string, { count: number; avgTokens: number; avgDuration: number }> = {};
+    for (const run of runs) {
+      const tt = run.taskType || 'unknown';
+      if (!taskTypeStats[tt]) taskTypeStats[tt] = { count: 0, avgTokens: 0, avgDuration: 0 };
+      taskTypeStats[tt].count++;
+      taskTypeStats[tt].avgTokens += run.totalTokens;
+      taskTypeStats[tt].avgDuration += run.durationMs || 0;
     }
+    for (const tt of Object.keys(taskTypeStats)) {
+      const s = taskTypeStats[tt];
+      s.avgTokens = Math.round(s.avgTokens / s.count);
+      s.avgDuration = Math.round(s.avgDuration / s.count);
+    }
+
+    // Tool usage frequency
+    const toolUsage: Record<string, number> = {};
+    for (const run of runs) {
+      for (const tc of run.toolCalls) {
+        toolUsage[tc.name] = (toolUsage[tc.name] || 0) + 1;
+      }
+    }
+    const topTools = Object.entries(toolUsage)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    const result = {
+      overview: {
+        totalRuns: stats.totalRuns,
+        activeRuns: stats.activeRuns,
+        avgDuration: `${stats.avgDurationMs}ms`,
+        avgTokens: stats.avgTokens,
+        totalToolCalls: stats.totalToolCalls,
+      },
+      taskTypeBreakdown: taskTypeStats,
+      topToolsUsed: Object.fromEntries(topTools),
+      recentActivity: recentRuns.slice(0, 5).map((r: any) => ({
+        time: new Date(r.startTime).toLocaleString('th-TH'),
+        task: r.taskType,
+        tokens: r.totalTokens,
+        tools: r.toolCalls.length,
+        success: !r.error,
+      })),
+    };
+
+    return `📈 สถิติการทำงาน:\n${JSON.stringify(result, null, 2)}`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการคำนวณสถิติ: ${error.message}`;
   }
-  const topTools = Object.entries(toolUsage)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-
-  const result = {
-    overview: {
-      totalRuns: stats.totalRuns,
-      activeRuns: stats.activeRuns,
-      avgDuration: `${stats.avgDurationMs}ms`,
-      avgTokens: stats.avgTokens,
-      totalToolCalls: stats.totalToolCalls,
-    },
-    taskTypeBreakdown: taskTypeStats,
-    topToolsUsed: Object.fromEntries(topTools),
-    recentActivity: recentRuns.slice(0, 5).map((r: any) => ({
-      time: new Date(r.startTime).toLocaleString('th-TH'),
-      task: r.taskType,
-      tokens: r.totalTokens,
-      tools: r.toolCalls.length,
-      success: !r.error,
-    })),
-  };
-
-  return `📈 สถิติการทำงาน:\n${JSON.stringify(result, null, 2)}`;
 }
 
 async function handleGetSystemPaths() {
-  const os = await import('os');
-  const path = await import('path');
-  
-  const home = os.homedir();
-  const paths = {
-    home,
-    desktop: path.join(home, 'Desktop'),
-    documents: path.join(home, 'Documents'),
-    downloads: path.join(home, 'Downloads'),
-    pictures: path.join(home, 'Pictures'),
-    videos: path.join(home, 'Videos'),
-    temp: os.tmpdir(),
-    cwd: process.cwd(),
-    appData: process.env.APPDATA || (process.platform === 'darwin' ? path.join(home, 'Library', 'Preferences') : path.join(home, '.local', 'share')),
-  };
+  try {
+    const os = await import('os');
+    const path = await import('path');
+    
+    const home = os.homedir();
+    const paths = {
+      home,
+      desktop: path.join(home, 'Desktop'),
+      documents: path.join(home, 'Documents'),
+      downloads: path.join(home, 'Downloads'),
+      pictures: path.join(home, 'Pictures'),
+      videos: path.join(home, 'Videos'),
+      temp: os.tmpdir(),
+      cwd: process.cwd(),
+      appData: process.env.APPDATA || (process.platform === 'darwin' ? path.join(home, 'Library', 'Preferences') : path.join(home, '.local', 'share')),
+    };
 
-  return `🏠 พาธสำคัญในระบบที่คุณสามารถเข้าถึงได้:\n${JSON.stringify(paths, null, 2)}`;
+    return `🏠 พาธสำคัญในระบบที่คุณสามารถเข้าถึงได้:\n${JSON.stringify(paths, null, 2)}`;
+  } catch (error: any) {
+    return `❌ เกิดข้อผิดพลาดในการเข้าถึงพาธระบบ: ${error.message}`;
+  }
 }

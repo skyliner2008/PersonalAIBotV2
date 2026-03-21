@@ -11,17 +11,24 @@ memoryRoutes.use(requireReadWriteAuth('viewer'));
 // FB conversation memory info
 memoryRoutes.get('/memory/fb/:convId', asyncHandler(async (req, res) => {
   const convId = String(req.params.convId);
-  const conv = dbGet<{ fb_user_name: string | null; summary: string; summary_msg_count: number }>(
+  const conv = await dbGet<{ fb_user_name: string | null; summary: string; summary_msg_count: number }>(
     'SELECT * FROM conversations WHERE id = ?',
     [convId],
   );
   if (!conv) return res.status(404).json({ success: false, error: 'Conversation not found' });
 
-  const profile = dbGet<{ facts: string; tags: string; total_messages: number; first_contact: string }>(
+  const profile = await dbGet<{ facts: string; tags: string; total_messages: number; first_contact: string }>(
     'SELECT * FROM user_profiles WHERE user_id = ?',
     [convId],
   );
-  const msgCount = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?', [convId]);
+  const msgCount = await dbGet<{ c: number }>('SELECT COUNT(*) as c FROM messages WHERE conversation_id = ?', [convId]);
+
+  let facts = [];
+  let tags = [];
+  if (profile) {
+    try { facts = JSON.parse(profile.facts); } catch { facts = []; }
+    try { tags = JSON.parse(profile.tags); } catch { tags = []; }
+  }
 
   res.json({
     conversationId: convId,
@@ -30,20 +37,8 @@ memoryRoutes.get('/memory/fb/:convId', asyncHandler(async (req, res) => {
     summary: conv.summary || '',
     summaryMsgCount: conv.summary_msg_count || 0,
     profile: profile ? {
-      facts: (() => {
-        try {
-          return JSON.parse(profile.facts);
-        } catch {
-          return [];
-        }
-      })(),
-      tags: (() => {
-        try {
-          return JSON.parse(profile.tags);
-        } catch {
-          return [];
-        }
-      })(),
+      facts,
+      tags,
       totalMessages: profile.total_messages,
       firstContact: profile.first_contact,
     } : null,
@@ -51,55 +46,48 @@ memoryRoutes.get('/memory/fb/:convId', asyncHandler(async (req, res) => {
 }));
 
 // Clear all legacy FB memory
-memoryRoutes.delete('/memory/all', async (_req, res) => {
-  try {
-    dbRun('DELETE FROM messages');
-    dbRun('DELETE FROM user_profiles');
-    dbRun('DELETE FROM conversations');
-    addLog('system', 'Wiped AI Memory', 'Cleared all conversations, messages, and profiles', 'warning');
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
+memoryRoutes.delete('/memory/all', asyncHandler(async (_req, res) => {
+  await dbRun('DELETE FROM messages');
+  await dbRun('DELETE FROM user_profiles');
+  await dbRun('DELETE FROM conversations');
+  addLog('system', 'Wiped AI Memory', 'Cleared all conversations, messages, and profiles', 'warning');
+  res.json({ success: true });
+}));
 
 // Clear one legacy FB conversation
-memoryRoutes.delete('/memory/fb/:convId', async (req, res) => {
-  try {
-    const convId = req.params.convId;
-    dbRun('DELETE FROM messages WHERE conversation_id = ?', [convId]);
-    dbRun('DELETE FROM user_profiles WHERE user_id = ?', [convId]);
-    dbRun('DELETE FROM conversations WHERE id = ?', [convId]);
-    addLog('system', 'Cleared User Memory', `Cleared memory for ID: ${convId}`, 'info');
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
+memoryRoutes.delete('/memory/fb/:convId', asyncHandler(async (req, res) => {
+  const convId = String(req.params.convId);
+  await dbRun('DELETE FROM messages WHERE conversation_id = ?', [convId]);
+  await dbRun('DELETE FROM user_profiles WHERE user_id = ?', [convId]);
+  await dbRun('DELETE FROM conversations WHERE id = ?', [convId]);
+  addLog('system', 'Cleared User Memory', `Cleared memory for ID: ${convId}`, 'info');
+  res.json({ success: true });
+}));
 
 // Conversations (with pagination)
-memoryRoutes.get('/conversations', (req, res) => {
+memoryRoutes.get('/conversations', asyncHandler(async (req, res) => {
   const limit = parseIntParam(req.query.limit, 50, 1, 200);
   const offset = parseIntParam(req.query.offset, 0, 0, 100000);
-  const rows = dbAll(`
+  const rows = await dbAll(`
     SELECT c.*, COUNT(m.id) as message_count
     FROM conversations c
     LEFT JOIN messages m ON m.conversation_id = c.id
     GROUP BY c.id
     ORDER BY c.last_message_at DESC LIMIT ? OFFSET ?
   `, [limit, offset]);
-  const total = dbGet<{ c: number }>('SELECT COUNT(*) as c FROM conversations');
+  const total = await dbGet<{ c: number }>('SELECT COUNT(*) as c FROM conversations');
   res.json({ items: rows, total: total?.c ?? 0, limit, offset });
-});
+}));
 
-memoryRoutes.get('/conversations/:id/messages', (req, res) => {
+memoryRoutes.get('/conversations/:id/messages', asyncHandler(async (req, res) => {
+  const id = String(req.params.id);
   const limit = parseIntParam(req.query.limit, 50, 1, 500);
-  const rows = dbAll(
-    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT ?',
-    [req.params.id, limit],
+  const rows = await dbAll(
+    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT ?',
+    [id, limit],
   );
-  res.json(rows.reverse());
-});
+  res.json(rows);
+}));
 
 // Memory viewer (with pagination)
 memoryRoutes.get('/memory/chats', (req, res) => {
@@ -115,7 +103,7 @@ memoryRoutes.get('/memory/chats', (req, res) => {
       GROUP BY e.chat_id
       ORDER BY lastSeen DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all([limit, offset]);
     const total = db.prepare('SELECT COUNT(DISTINCT chat_id) as c FROM episodes').get() as { c: number } | undefined;
     res.json({ items: chats, total: total?.c ?? 0, limit, offset });
   } catch {
@@ -177,9 +165,9 @@ memoryRoutes.get('/memory/:chatId', (req, res) => {
     const workingMessages = getWorkingMemory(chatId);
     const archival = db.prepare(
       'SELECT id, fact, created_at FROM archival_memory WHERE chat_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
-    ).all(chatId, archivalLimit, archivalOffset) as any[];
-    const archivalTotal = (db.prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any)?.c ?? 0;
-    const episodeCount = (db.prepare('SELECT COUNT(*) as c FROM episodes WHERE chat_id = ?').get(chatId) as any)?.c ?? 0;
+    ).all([chatId, archivalLimit, archivalOffset]) as any[];
+    const archivalTotal = (db.prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get([chatId]) as any)?.c ?? 0;
+    const episodeCount = (db.prepare('SELECT COUNT(*) as c FROM episodes WHERE chat_id = ?').get([chatId]) as any)?.c ?? 0;
 
     res.json({
       chatId,
@@ -194,27 +182,24 @@ memoryRoutes.get('/memory/:chatId', (req, res) => {
   }
 });
 
-memoryRoutes.delete('/memory/:chatId', async (req, res) => {
-  const { chatId } = req.params;
+memoryRoutes.delete('/memory/:chatId', asyncHandler(async (req, res) => {
+  const chatId = String(req.params.chatId);
   const db = getDb();
+
+  await db.prepare('DELETE FROM archival_memory WHERE chat_id = ?').run([chatId]);
+  await db.prepare('DELETE FROM core_memory WHERE chat_id = ?').run([chatId]);
+  await db.prepare('DELETE FROM episodes WHERE chat_id = ?').run([chatId]);
+
   try {
-    db.prepare('DELETE FROM archival_memory WHERE chat_id = ?').run(chatId);
-    db.prepare('DELETE FROM core_memory WHERE chat_id = ?').run(chatId);
-    db.prepare('DELETE FROM episodes WHERE chat_id = ?').run(chatId);
-
-    try {
-      const { getVectorStore } = await import('../../memory/vectorStore.js');
-      const vs = await getVectorStore();
-      await vs.deleteByFilter({ chatId });
-    } catch {
-      // Vector store may not be ready.
-    }
-
-    addLog('system', 'Memory cleared', chatId, 'info');
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    const { getVectorStore } = await import('../../memory/vectorStore.js');
+    const vs = await getVectorStore();
+    await vs.deleteByFilter({ chatId });
+  } catch {
+    // Vector store may not be ready.
   }
-});
+
+  addLog('system', 'Memory cleared', chatId, 'info');
+  res.json({ success: true });
+}));
 
 export default memoryRoutes;

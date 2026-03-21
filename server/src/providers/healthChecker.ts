@@ -15,7 +15,7 @@ import { getEnabledProviders, toggleProvider, type ProviderDefinition } from './
 import { KeyManager } from './keyManager.js';
 import { addLog } from '../database/db.js';
 
-const log = createLogger('HealthChecker'); // Refactored
+const log = createLogger('HealthChecker'); // Refactored again // Refactored
 
 // ============ Configuration ============
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;   // Check every 5 minutes

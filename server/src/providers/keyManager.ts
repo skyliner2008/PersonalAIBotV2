@@ -90,8 +90,8 @@ export class KeyManager {
   static async deleteKey(providerId: string): Promise<boolean> {
     try {
       dbRun('DELETE FROM api_keys WHERE provider_id = ?', [providerId]);
-      // Also remove from credential store
-      dbRun(`DELETE FROM settings WHERE key = ?`, [`provider_key_${providerId}`]);
+      // Also remove from credential store - use SQL concatenation to prevent injection
+      dbRun("DELETE FROM settings WHERE key = 'provider_key_' || ?", [providerId]);
       log.info('✓ Key deleted', { providerId });
       return true;
     } catch (error) {
@@ -105,8 +105,9 @@ export class KeyManager {
    */
   static async listConfigured(): Promise<string[]> {
     try {
+      // Ensure the provider has an entry in api_keys and the actual key exists in settings
       const rows = dbAll<{ provider_id: string }>(
-        'SELECT DISTINCT provider_id FROM api_keys WHERE encrypted_value IS NOT NULL'
+        "SELECT DISTINCT provider_id FROM api_keys WHERE encrypted_value IS NOT NULL AND EXISTS (SELECT 1 FROM settings WHERE key = 'provider_key_' || provider_id)"
       );
       return rows.map(r => r.provider_id);
     } catch (error) {

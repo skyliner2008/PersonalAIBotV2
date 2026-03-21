@@ -30,7 +30,7 @@ export async function startCommentMonitor(io: SocketServer): Promise<void> {
 
     // Auto-stop if browser is gone
     if (!isRunning()) {
-      console.log('[CommentBot] Browser closed, auto-stopping...');
+      logger.warn('Browser closed, auto-stopping...');
       addLog('commentbot', 'Auto-stopped (browser closed)', undefined, 'warning');
       forceStop(io);
       return;
@@ -44,7 +44,7 @@ export async function startCommentMonitor(io: SocketServer): Promise<void> {
       const msg = e?.message || String(e);
 
       if (msg.includes('closed') || msg.includes('destroyed') || msg.includes('disposed') || msg.includes('Target page')) {
-        console.log('[CommentBot] Page/browser closed, stopping...');
+        logger.warn('Page/browser closed, stopping...');
         forceStop(io);
         return;
       }
@@ -54,7 +54,7 @@ export async function startCommentMonitor(io: SocketServer): Promise<void> {
       }
 
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        console.log('[CommentBot] Too many errors, auto-stopping...');
+        logger.error('Too many errors, auto-stopping...');
         addLog('commentbot', 'Auto-stopped (repeated errors)', msg, 'error');
         forceStop(io);
       }
@@ -158,7 +158,7 @@ async function checkWatchedPosts(io: SocketServer): Promise<void> {
       addLog('commentbot', `Error checking post ${watch.id}`, msg, 'error');
     } finally {
       if (page) {
-        try { if (!page.isClosed()) await page.close(); } catch (e) { console.debug('[CommentBot] page close:', String(e)); }
+        try { if (!page.isClosed()) await page.close(); } catch (e) { logger.debug(`page close error: ${String(e)}`); }
       }
     }
   }

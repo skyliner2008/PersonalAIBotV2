@@ -88,6 +88,9 @@ export default function SelfUpgrade() {
   const [showDiffModal, setShowDiffModal] = useState<{ id: number; title: string; filePath: string } | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffViewMode, setDiffViewMode] = useState<'split' | 'unified'>('split');
+  
+  const [showLogModal, setShowLogModal] = useState<{ id: number; title: string; content: string } | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -195,6 +198,22 @@ export default function SelfUpgrade() {
       setDiffData({ before: `Error loading backup logs. They might not exist.\n\n${e.message}`, after: '' });
     } finally {
       setDiffLoading(false);
+    }
+  };
+
+  const viewLog = async (p: Proposal) => {
+    setShowLogModal({ id: p.id, title: p.title, content: '' });
+    setLogLoading(true);
+    try {
+      const res = await api.getUpgradeProposalLog(p.id);
+      if (res && res.ok) {
+        setShowLogModal({ id: p.id, title: p.title, content: res.log });
+      }
+    } catch (e: any) {
+      console.error(e);
+      setShowLogModal({ id: p.id, title: p.title, content: `Error loading log file. It might have been deleted or never existed.\n\n${e.message}` });
+    } finally {
+      setLogLoading(false);
     }
   };
 
@@ -469,6 +488,15 @@ export default function SelfUpgrade() {
                             title="ดูการเปลี่ยนแปลงโค้ด (Diff)"
                           />
                         )}
+                        {p.status === 'rejected' && p.description.includes('.log') && (
+                          <ActionButton 
+                            onClick={() => viewLog(p)} 
+                            icon={FileCode} 
+                            color="text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20" 
+                            title="📄 ดู Log File"
+                            spin={logLoading && showLogModal?.id === p.id}
+                          />
+                        )}
                         <ActionButton 
                           onClick={() => deleteProposal(p.id)} 
                           icon={Trash2} 
@@ -644,6 +672,52 @@ export default function SelfUpgrade() {
                   <AlertTriangle className="w-8 h-8 mb-3 opacity-50 text-yellow-500" />
                   <span className="text-sm">ไม่พบข้อมูลไฟล์ Backup</span>
                   <span className="text-xs opacity-70 mt-1">ไฟล์อาจถูกดำเนินการก่อนที่ระบบ Diff Tracker จะติดตั้ง</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compiler Log Viewer Modal */}
+      {showLogModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#0f1117] border border-white/10 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/5 bg-white/5 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-1.5 bg-yellow-500/10 text-yellow-400 rounded-lg">
+                  <FileCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-100 text-sm">Compiler Error Log</h3>
+                  <p className="text-[11px] text-gray-400 font-mono mt-0.5">#{showLogModal.id} • {showLogModal.title}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowLogModal(null)}
+                className="p-2 text-gray-500 hover:text-white hover:bg-white/10 rounded-xl transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-hidden p-4 flex flex-col gap-2">
+              {logLoading ? (
+                <div className="animate-pulse flex items-center justify-center flex-1 h-full text-gray-500 gap-3">
+                  <RefreshCcw className="w-5 h-5 animate-spin" /> Fetching log file...
+                </div>
+              ) : (
+                <div className="flex flex-col h-full bg-black/40 border border-yellow-500/20 rounded-xl overflow-hidden min-h-0">
+                  <div className="shrink-0 bg-yellow-500/10 text-yellow-400 text-[10px] font-bold py-2 px-3 border-b border-yellow-500/20 uppercase tracking-widest flex justify-between">
+                     <span>TypeScript Compiler Dump</span>
+                  </div>
+                  <div className="flex-1 overflow-auto min-h-0">
+                    <pre className="p-4 text-[11px] font-mono text-gray-300 w-max min-w-full">
+                      {showLogModal.content}
+                    </pre>
+                  </div>
                 </div>
               )}
             </div>

@@ -2,7 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TaskType, ModelConfig, MultiModelConfig, modelRouting as defaultMultiConfig } from './aiConfig.js';
 import { getAgentCompatibleProvider, getAgentProviderDefaultModel } from '../../providers/agentRuntime.js';
+import { createLogger } from '../../utils/logger.js';
 
+const logger = createLogger('ConfigManager');
 const CONFIG_PATH = path.join(process.cwd(), 'ai_routing_config.json');
 
 // Cost-optimized model routing:
@@ -80,7 +82,7 @@ export class ConfigManager {
         return { autoRouting, routes: validated, botOverrides };
       }
     } catch (err) {
-      console.error('[ConfigManager] Failed to load config, using defaults:', err);
+      logger.error('Failed to load config, using defaults:', err);
     }
     // Save defaults if config doesn't exist or is invalid
     const def: SystemRoutingConfig = { 
@@ -192,7 +194,7 @@ export class ConfigManager {
       this.updateConfig({ routes: nextRoutes });
     }
     
-    console.log(`[ConfigManager] Promoted ${successfulModel.provider}/${successfulModel.modelName} to active for ${taskType}${botId ? ` (Bot: ${botId})` : ''}`);
+    logger.info(`Promoted ${successfulModel.provider}/${successfulModel.modelName} to active for ${taskType}${botId ? ` (Bot: ${botId})` : ''}`);
   }
 
   public removeBotConfig(botId: string) {
@@ -249,7 +251,7 @@ export class ConfigManager {
     try {
       fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
     } catch (err) {
-      console.error('[ConfigManager] Failed to save config:', err);
+      logger.error('Failed to save config:', err);
     }
   }
 }

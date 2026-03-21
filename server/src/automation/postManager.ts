@@ -17,10 +17,7 @@ export function schedulePost(data: {
   scheduledAt: string;
   cronExpression?: string;
 }): number {
-  dbRun(`
-    INSERT INTO scheduled_posts (content, ai_topic, post_type, target, target_id, target_name, scheduled_at, cron_expression, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
+  const params = [
     data.content || null,
     data.aiTopic || null,
     data.postType || 'text',
@@ -29,12 +26,19 @@ export function schedulePost(data: {
     data.targetName || null,
     data.scheduledAt,
     data.cronExpression || null,
-    data.content ? 'ready' : 'pending' // If content provided, it's ready; otherwise needs AI generation
-  ]);
+    data.content ? 'ready' : 'pending'
+  ];
+
+  dbRun(`
+    INSERT INTO scheduled_posts (content, ai_topic, post_type, target, target_id, target_name, scheduled_at, cron_expression, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, params);
 
   const lastRow = dbGet('SELECT last_insert_rowid() as id');
-  addLog('post', 'Post scheduled', `ID: ${lastRow?.id}, scheduled: ${data.scheduledAt}`, 'info');
-  return Number(lastRow?.id);
+  const insertId = lastRow?.id ? Number(lastRow.id) : 0;
+
+  addLog('post', 'Post scheduled', `ID: ${insertId}, scheduled: ${data.scheduledAt}`, 'info');
+  return insertId;
 }
 
 /**
@@ -68,9 +72,10 @@ export async function processPendingPosts(io: SocketServer): Promise<void> {
           ['failed', 'AI content generation failed', post.id]);
       }
     } catch (e) {
+      const errorMsg = String(e).substring(0, 500);
       dbRun('UPDATE scheduled_posts SET status = ?, error_message = ? WHERE id = ?',
-        ['failed', String(e), post.id]);
-      addLog('post', 'Content generation failed', String(e), 'error');
+        ['failed', errorMsg, post.id]);
+      addLog('post', 'Content generation failed', errorMsg, 'error');
     }
   }
 

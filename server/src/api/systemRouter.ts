@@ -246,15 +246,15 @@ router.get('/runtime-controls', (_req, res) => {
         controls: enriched,
         summary: {
             total: enriched.length,
-            overridden: enriched.filter((c: any) => c.isOverridden).length,
-            bySource: enriched.reduce((acc: any, c: any) => {
+            overridden: enriched.filter((c: { isOverridden: boolean }) => c.isOverridden).length,
+            bySource: enriched.reduce((acc: Record<string, number>, c: { source: string }) => {
                 acc[c.source] = (acc[c.source] || 0) + 1;
                 return acc;
-            }, {}),
-            byCategory: enriched.reduce((acc: any, c: any) => {
+            }, {} as Record<string, number>),
+            byCategory: enriched.reduce((acc: Record<string, number>, c: { category: string }) => {
                 acc[c.category] = (acc[c.category] || 0) + 1;
                 return acc;
-            }, {}),
+            }, {} as Record<string, number>),
         },
     });
 });

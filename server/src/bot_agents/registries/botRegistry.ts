@@ -224,7 +224,8 @@ export function updateBot(id: string, updates: Partial<{
   fields.push('updated_at = CURRENT_TIMESTAMP');
   values.push(id);
 
-  db.prepare(`UPDATE bot_instances SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  const sql = 'UPDATE bot_instances SET ' + fields.join(', ') + ' WHERE id = ?';
+  db.prepare(sql).run(...values);
   invalidateBotCache();
   return getBot(id);
 }

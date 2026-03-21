@@ -100,7 +100,7 @@ async function getPublicBaseUrl(): Promise<string> {
       if (tunnel?.public_url) {
         cachedPublicUrl = tunnel.public_url as string;
         lastUrlCheck = now;
-        console.log(`[Tools] Auto-detected ngrok URL: ${cachedPublicUrl}`);
+        logger.info(`Auto-detected ngrok URL: ${cachedPublicUrl}`);
         return cachedPublicUrl;
       }
     }

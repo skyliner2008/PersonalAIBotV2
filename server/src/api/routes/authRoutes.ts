@@ -1,4 +1,4 @@
-import { Router, Request } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { validateBody } from '../../utils/validation.js';
@@ -21,12 +21,13 @@ const loginLimiter = rateLimit({
 authRoutes.post('/auth/login', loginLimiter, validateBody(authLoginSchema), async (req, res) => {
   const { username, password } = req.body;
   try {
+    // Ensure secure hashing is handled by authLogin before comparison
     const result = await authLogin(username, password);
     if (!result) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    res.json(result);
-  } catch (error) {
+    res.json({ data: result, error: null });
+  } catch (error: unknown) {
     console.error('Login error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

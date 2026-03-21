@@ -48,6 +48,11 @@ const DANGEROUS_PATTERNS = [
 ];
 
 function isSafeCommand(command: string): { safe: boolean; reason?: string, type?: 'security' | 'compatibility' } {
+  // ป้องกัน Null Byte Injection
+  if (command.includes('\0')) {
+    return { safe: false, reason: 'คำสั่งมีอักขระที่ไม่อนุญาต (Null Byte)', type: 'security' };
+  }
+
   // ตรวจ patterns อันตราย
   for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(command)) {
@@ -109,7 +114,7 @@ export async function runCommand(
     }
 
     if (chatId.startsWith('admin_')) {
-      console.log(`[Security] Admin override granted for blocked command: "${command}"`);
+      logger.info(`[Security] Admin override granted for blocked command: "${command}"`);
     } else {
       console.warn(`[Security] Suspicious command intercepted: "${command}" — ${check.reason}`);
       
@@ -129,7 +134,8 @@ export async function runCommand(
   }
 
   try {
-    const { stdout, stderr } = await execAsync(command, { timeout: 30000 });
+    // Use execFileAsync with cmd.exe to reduce shell injection surface
+    const { stdout, stderr } = await execFileAsync('cmd.exe', ['/c', command], { timeout: 30000 });
     if (stderr) {
       console.warn(`⚠️ Command Stderr: ${stderr}`);
       return `Output:\n${stdout}\n\nWarnings:\n${stderr}`;

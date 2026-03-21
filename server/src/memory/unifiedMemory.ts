@@ -335,120 +335,104 @@ export function setEmbeddingProvider(fn: (text: string) => Promise<number[]>): v
     embeddingProvider = fn;
 }
 
+/** Get embedding for a fact if provider is available */
+async function _getFactEmbedding(fact: string): Promise<{ embedding: Buffer | null, vector: number[] }> {
+    if (!embeddingProvider) return { embedding: null, vector: [] };
+    try {
+        const vec = await embeddingProvider(fact);
+        return {
+            embedding: Buffer.from(new Float32Array(vec).buffer),
+            vector: vec
+        };
+    } catch (e) {
+        console.error('[Memory] Embedding failed, saving without:', e);
+        return { embedding: null, vector: [] };
+    }
+}
+
+/** Check if a similar fact already exists (similarity > 0.9) */
+function _findDuplicateFact(chatId: string, embedding: Buffer): { id: number } | null {
+    const existing = getArchivalFacts(chatId);
+    const embFloat = new Float32Array(embedding.buffer, embedding.byteOffset, embedding.byteLength / 4);
+    for (const ex of existing) {
+        if (ex.embedding) {
+            const sim = cosineSimilarity(embFloat, ex.embedding);
+            if (sim > 0.9) return { id: ex.id };
+        }
+    }
+    return null;
+}
+
+/** Sync archival fact to vector store */
+async function _syncFactToVectorStore(id: string | number, fact: string, vector: number[], chatId: string) {
+    if (!vectorStoreReady || vector.length === 0) return;
+    try {
+        const vs = await getVectorStore();
+        await vs.upsert({
+            id: `archival_${id}`,
+            text: fact,
+            embedding: vector,
+            metadata: {
+                chatId,
+                type: 'archival',
+                createdAt: new Date().toISOString(),
+            },
+        });
+    } catch (err) {
+        log.warn('Failed to update vector store:', { error: String(err) });
+    }
+}
+
+/** Prune archival memory if limit exceeded (short and old facts first) */
+async function _pruneArchivalMemory(chatId: string) {
+    const count = (getDb().prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any)?.c || 0;
+    if (count <= ARCHIVAL_LIMIT) return;
+
+    const excess = count - ARCHIVAL_LIMIT;
+    const toDelete = getDb().prepare(`
+        SELECT id FROM archival_memory WHERE chat_id = ?
+        ORDER BY LENGTH(fact) ASC, created_at ASC LIMIT ?
+    `).all(chatId, excess) as any[];
+
+    if (toDelete.length === 0) return;
+
+    const placeholders = toDelete.map(() => '?').join(',');
+    getDb().prepare(`DELETE FROM archival_memory WHERE id IN (${placeholders})`)
+        .run(...toDelete.map(r => r.id));
+
+    if (vectorStoreReady) {
+        try {
+            const vs = await getVectorStore();
+            for (const row of toDelete) await vs.delete(`archival_${row.id}`);
+        } catch (err) {
+            console.warn('[Memory] Vector store pruning failed:', err);
+        }
+    }
+}
+
 export async function saveArchivalFact(chatId: string, fact: string): Promise<void> {
     // Use per-chatId mutex to prevent concurrent duplicate checks
     return memoryMutex.withLock(`archival:${chatId}`, async () => {
-        let embedding: Buffer | null = null;
-        let embeddingVec: number[] = [];
-
-        if (embeddingProvider) {
-            try {
-                const vec = await embeddingProvider(fact);
-                embedding = Buffer.from(new Float32Array(vec).buffer);
-                embeddingVec = vec;
-            } catch (e) {
-                console.error('[Memory] Embedding failed, saving without:', e);
-            }
-        }
+        const { embedding, vector } = await _getFactEmbedding(fact);
 
         // Dedup: check if very similar fact already exists
-        if (embedding && embeddingVec.length > 0) {
-            const existing = getArchivalFacts(chatId);
-            for (const ex of existing) {
-                if (ex.embedding) {
-                    const sim = cosineSimilarity(
-                        new Float32Array(embedding.buffer, embedding.byteOffset, embedding.byteLength / 4),
-                        ex.embedding
-                    );
-                    if (sim > 0.9) {
-                        // Update existing instead of inserting duplicate
-                        const updated = getDb().prepare('UPDATE archival_memory SET fact = ?, embedding = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
-                            .run(fact, embedding, ex.id);
-
-                        // Also update in vector store
-                        if (vectorStoreReady) {
-                            try {
-                                const vs = await getVectorStore();
-                                const doc: VectorDocument = {
-                                    id: `archival_${ex.id}`,
-                                    text: fact,
-                                    embedding: embeddingVec,
-                                    metadata: {
-                                        chatId,
-                                        type: 'archival',
-                                        createdAt: new Date().toISOString(),
-                                    },
-                                };
-                                await vs.upsert(doc);
-                            } catch (err) {
-                                log.warn('Failed to update vector store:', { error: String(err) });
-                            }
-                        }
-                        return;
-                    }
-                }
+        if (embedding) {
+            const dup = _findDuplicateFact(chatId, embedding);
+            if (dup) {
+                getDb().prepare('UPDATE archival_memory SET fact = ?, embedding = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
+                    .run(fact, embedding, dup.id);
+                await _syncFactToVectorStore(dup.id, fact, vector, chatId);
+                return;
             }
         }
 
+        // Insert new fact
         const result = getDb().prepare('INSERT INTO archival_memory (chat_id, fact, embedding) VALUES (?, ?, ?)')
             .run(chatId, fact, embedding);
+        const newId = (result as any).lastInsertRowid || Date.now();
 
-        // Add to vector store for fast semantic search
-        if (vectorStoreReady && embeddingVec.length > 0) {
-            try {
-                const vs = await getVectorStore();
-                // Use SQLite rowid or generate ID
-                const newId = (result as any).lastInsertRowid || Date.now();
-                const doc: VectorDocument = {
-                    id: `archival_${newId}`,
-                    text: fact,
-                    embedding: embeddingVec,
-                    metadata: {
-                        chatId,
-                        type: 'archival',
-                        createdAt: new Date().toISOString(),
-                    },
-                };
-                await vs.upsert(doc);
-            } catch (err) {
-                console.warn('[Memory] Failed to add to vector store:', err);
-            }
-        }
-
-        // 🧠 Smart Pruning — ถ้าเกิน ARCHIVAL_LIMIT ให้ลบ facts ที่สั้นและเก่าที่สุดออก
-        // (ไม่ลบแบบ FIFO ล้วนๆ — facts สั้นมักมีคุณค่าน้อยกว่า)
-        const count = getDb().prepare('SELECT COUNT(*) as c FROM archival_memory WHERE chat_id = ?').get(chatId) as any;
-        if (count?.c > ARCHIVAL_LIMIT) {
-            const excess = count.c - ARCHIVAL_LIMIT;
-            // ลบ facts ที่สั้นที่สุดก่อน (priority: short = low-value), หากสั้นเท่ากันให้ลบเก่าก่อน
-            const toDelete = getDb().prepare(`
-                SELECT id FROM archival_memory
-                WHERE chat_id = ?
-                ORDER BY LENGTH(fact) ASC, created_at ASC
-                LIMIT ?
-            `).all(chatId, excess) as any[];
-
-            getDb().prepare(`
-                DELETE FROM archival_memory WHERE id IN (
-                    SELECT id FROM archival_memory
-                    WHERE chat_id = ?
-                    ORDER BY LENGTH(fact) ASC, created_at ASC
-                    LIMIT ?
-                )
-            `).run(chatId, excess);
-
-            // Also delete from vector store
-            if (vectorStoreReady) {
-                try {
-                    const vs = await getVectorStore();
-                    for (const row of toDelete) {
-                        await vs.delete(`archival_${row.id}`);
-                    }
-                } catch (err) {
-                    console.warn('[Memory] Failed to delete from vector store:', err);
-                }
-            }
-        }
+        await _syncFactToVectorStore(newId, fact, vector, chatId);
+        await _pruneArchivalMemory(chatId);
     }); // end memoryMutex.withLock
 }
 
