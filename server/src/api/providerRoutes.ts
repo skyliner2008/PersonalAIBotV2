@@ -91,7 +91,7 @@ router.get('/', async (_req: Request, res: Response) => {
     const providersWithStatus = await Promise.all(
       Object.values(registry.providers).map(async (provider) => ({
         ...provider,
-        configured: !!(await KeyManager.getKey(provider.id)),
+        configured: provider.requiresAuth ? !!(await KeyManager.getKey(provider.id)) : true,
       }))
     );
 
@@ -116,7 +116,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Provider not found' });
     }
 
-    const configured = !!(await KeyManager.getKey(id));
+    const configured = provider.requiresAuth ? !!(await KeyManager.getKey(id)) : true;
     res.json({
       success: true,
       provider: { ...provider, configured },
@@ -435,7 +435,7 @@ router.post('/oauth/scan', async (_req: Request, res: Response) => {
 });
 
 // POST /api/providers/oauth/register — register a detected OAuth provider into the registry
-router.post('/oauth/register', (req: Request, res: Response) => {
+router.post('/oauth/register', async (req: Request, res: Response) => {
   try {
     const cred = req.body as OAuthCredential;
     if (!cred?.providerId || !cred?.name) {
@@ -453,11 +453,12 @@ router.post('/oauth/register', (req: Request, res: Response) => {
         defaultModel: cred.defaultModel || existing.defaultModel,
         models: cred.models && cred.models.length > 0 ? cred.models : existing.models,
         notes: `OAuth via ${cred.cliTool} CLI — ${cred.source}`,
+        requiresAuth: !!cred.accessToken,
       });
 
       // Store the access token if available
       if (cred.accessToken) {
-        setManagedSetting(`provider_key_${cred.providerId}`, cred.accessToken);
+        await KeyManager.setKey(cred.providerId, cred.accessToken, 'dashboard');
       }
 
       res.json({ success: true, action: 'updated', providerId: cred.providerId });
@@ -478,7 +479,7 @@ router.post('/oauth/register', (req: Request, res: Response) => {
         streaming: true,
         functionCalling: cred.providerType !== 'rest-api',
       },
-      requiresAuth: true,
+      requiresAuth: !!cred.accessToken,
       apiKeyEnvVar: `${cred.providerId.toUpperCase().replace(/-/g, '_')}_API_KEY`,
       enabled: true,
       notes: `OAuth via ${cred.cliTool} CLI — ${cred.source}`,
@@ -488,7 +489,7 @@ router.post('/oauth/register', (req: Request, res: Response) => {
 
     // Store the access token
     if (cred.accessToken) {
-      setManagedSetting(`provider_key_${cred.providerId}`, cred.accessToken);
+      await KeyManager.setKey(cred.providerId, cred.accessToken, 'dashboard');
     }
 
     res.json({ success: true, action: 'created', providerId: cred.providerId });
@@ -499,7 +500,7 @@ router.post('/oauth/register', (req: Request, res: Response) => {
 });
 
 // POST /api/providers/oauth/refresh/:id — refresh a specific OAuth token
-router.post('/oauth/refresh/:id', (req: Request, res: Response) => {
+router.post('/oauth/refresh/:id', async (req: Request, res: Response) => {
   try {
     const providerId = getParamString(req.params.id);
     const refreshed = refreshOAuthToken(providerId);
@@ -509,7 +510,7 @@ router.post('/oauth/refresh/:id', (req: Request, res: Response) => {
     }
 
     if (refreshed.valid && refreshed.accessToken) {
-      setManagedSetting(`provider_key_${providerId}`, refreshed.accessToken);
+      await KeyManager.setKey(providerId, refreshed.accessToken, 'dashboard');
     }
 
     res.json({ success: true, credential: { ...refreshed, accessToken: undefined } });

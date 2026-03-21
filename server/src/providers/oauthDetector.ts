@@ -516,8 +516,8 @@ function detectGeminiCLI(): OAuthCredential | null {
   const version = execSafe('gemini --version 2>&1') || execSafe('gemini --help 2>&1');
   const valid = !!version && !version.includes('not found');
 
-  // Gemini CLI uses GEMINI_API_KEY or gcloud auth under the hood
-  const apiKey = process.env.GEMINI_API_KEY || '';
+  // Gemini CLI usually requires an API key, we won't auto-import it from .env
+  const apiKey = '';
 
   return {
     providerId: 'gemini-cli',
@@ -570,7 +570,8 @@ function detectClaudeCLI(): OAuthCredential | null {
     && !version.toLowerCase().includes('not found')
     && !version.toLowerCase().includes('no such file');
 
-  const apiKey = process.env.ANTHROPIC_API_KEY || '';
+  // Claude CLI uses an internal token or env var, we won't auto-import .env here
+  const apiKey = '';
 
   return {
     providerId: 'claude-cli',
@@ -594,12 +595,12 @@ function detectOpenAICLI(): OAuthCredential | null {
   if (!openaiPath) return null;
 
   const version = execSafe('openai --version 2>&1') || execSafe('openai --help 2>&1');
-  const apiKey = process.env.OPENAI_API_KEY || '';
+  const apiKey = '';
 
   // Valid if: (1) openai binary exists AND (2) either version check passes or API key is set
   // The node_modules/.bin/openai binary is functional for API calls when OPENAI_API_KEY is set
-  const versionOk = !!version && !version.includes('not found') && !version.includes('is not recognized');
-  const valid = versionOk || !!apiKey;
+  // Valid if: openai binary exists AND version check passes
+  const valid = !!version && !version.includes('not found') && !version.includes('is not recognized');
 
   return {
     providerId: 'openai-cli',
@@ -631,7 +632,8 @@ function detectCodexCLI(): OAuthCredential | null {
   const version = execSafe('codex --version 2>&1');
   const valid = !!version && !version.includes('not found');
 
-  const apiKey = process.env.OPENAI_API_KEY || '';
+  // Don't auto-read .env for codex
+  const apiKey = '';
 
   return {
     providerId: 'codex-cli',

@@ -54,7 +54,7 @@ async function main() {
             if (!process.env.GEMINI_API_KEY) {
                 throw new Error('GEMINI_API_KEY is not set in .env');
             }
-            const aiAgent = new Agent(process.env.GEMINI_API_KEY);
+            const aiAgent = new Agent();
 
             // We directly construct the context to skip the webhook layer
             const ctx = {

@@ -27,7 +27,7 @@ const execPromise = util.promisify(exec);
 const log = createLogger('SelfUpgrade');
 
 // ── Configuration ──
-let IDLE_THRESHOLD_MS = 30 * 60 * 1000;     // 30 นาที
+let IDLE_THRESHOLD_MS = 5 * 60 * 1000;      // 5 นาที (อิงจากการโต้ตอบแชท)
 let CHECK_INTERVAL_MS = 5 * 60 * 1000;      // ตรวจทุก 5 นาที (default)
 const SCAN_BATCH_SIZE = 3;                      // อ่านทีละ 3 ไฟล์
 const MAX_FILE_SIZE_BYTES = 100 * 1024;         // ข้ามไฟล์ > 100KB
@@ -39,6 +39,8 @@ const DRY_RUN = true;                           // ช่วงทดสอบ: 
 let lastUserActivity = Date.now();
 let isUpgrading = false;
 let upgradeInterval: NodeJS.Timeout | null = null;
+let _continuousScanTimeout: NodeJS.Timeout | null = null;
+export let _isManualScanActive = false; // Expose manual scan state
 let _paused = false;
 let _scanCursor = 0;     // ตำแหน่งที่สแกนถึง
 let _fileIndex: string[] = [];
@@ -47,6 +49,15 @@ export async function resumeBatchImplementation(rootDir: string): Promise<void> 
   const dbModule = await import('../database/db.js');
   const db = dbModule.getDb();
   
+  // Get total approved tasks to show progress
+  let totalApproved = db.prepare(`SELECT COUNT(*) as count FROM upgrade_proposals WHERE status = 'approved'`).get() as { count: number };
+  let currentTaskNumber = 1;
+  const initialApprovedCount = totalApproved ? totalApproved.count : 0;
+  
+  if (initialApprovedCount > 0) {
+    console.log(`\n\x1b[36m[SelfUpgrade] In progress Upgrade ${currentTaskNumber} / ${initialApprovedCount} approved\x1b[0m`);
+  }
+
   while (dbModule.getSetting('upgrade_implement_all') === 'true') {
     const nextProposal = db.prepare(`
       SELECT id FROM upgrade_proposals 
@@ -57,20 +68,26 @@ export async function resumeBatchImplementation(rootDir: string): Promise<void> 
 
     if (!nextProposal) {
       dbModule.setSetting('upgrade_implement_all', 'false');
-      log.info('[SelfUpgrade] Batch implementation complete. No approved proposals left.');
+      console.log('\n\x1b[36m[SelfUpgrade] Batch implementation complete. No approved proposals left.\x1b[0m');
       break;
     }
 
-    log.info(`[SelfUpgrade] Resuming batch implementation for proposal #${nextProposal.id}...`);
+    if (currentTaskNumber > 1) {
+       console.log(`\n\x1b[36m[SelfUpgrade] In progress Upgrade ${currentTaskNumber} / ${initialApprovedCount} approved\x1b[0m`);
+    }
     updateProposalStatus(nextProposal.id, 'implementing');
     
     try {
       const success = await implementProposalById(nextProposal.id, rootDir);
       if (!success) {
-        log.warn(`[SelfUpgrade] Proposal #${nextProposal.id} failed to implement. Moving to next.`);
+        console.log(`\x1b[31m[SelfUpgrade] Proposal #${nextProposal.id} : Rejected\x1b[0m`);
+      } else {
+        console.log(`\x1b[32m[SelfUpgrade] Proposal #${nextProposal.id} : Succeed\x1b[0m`);
       }
+      currentTaskNumber++;
     } catch (err: any) {
-      log.error(`[SelfUpgrade] Proposal #${nextProposal.id} threw error: ${err.message}`);
+      console.log(`\x1b[31m[SelfUpgrade] Proposal #${nextProposal.id} : Rejected (Error)\x1b[0m`);
+      currentTaskNumber++;
     }
   }
 }
@@ -185,18 +202,8 @@ const _dirname = path.dirname(_filename);
 
 /** Get actual OS idle time if on Windows, else fallback to API activity */
 function getOsIdleTimeMs(): number {
-  if (os.platform() === 'win32') {
-    try {
-      const exePath = path.join(_dirname, 'idleCheck.exe');
-      if (fs.existsSync(exePath)) {
-        const out = execFileSync(exePath, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-        const idle = parseInt(out.trim(), 10);
-        if (!isNaN(idle) && idle >= 0) return idle;
-      }
-    } catch {
-      // Fallback to API activity if exe fails
-    }
-  }
+  // Override: Completely ignore OS mouse/keyboard idle. 
+  // We only care about Bot Chat idle time.
   return Date.now() - lastUserActivity;
 }
 
@@ -216,6 +223,23 @@ async function buildFileIndex(rootDir: string): Promise<string[]> {
     '.ts', '.tsx', '.js', '.jsx', '.json', '.sql', '.md',
     '.css', '.html', '.yaml', '.yml', '.env.example',
   ]);
+  
+  // 🛡️ Immortal Core Sandbox (Self-Preservation)
+  // These files are the heart of the backend. They are strictly invisible to the scanner 
+  // and immune to Auto-Upgrades so the AI cannot accidentally break the Node server permanently.
+  const PROTECTED_CORE_FILES = new Set([
+    'index.ts',
+    'config.ts',
+    'configValidator.ts',
+    'queue.js',
+    'database/db.ts',
+    'database/db.js',
+    'evolution/selfUpgrade.ts',
+    'evolution/selfReflection.ts',
+    'terminal/terminalGateway.ts',
+    'api/socketHandlers.ts',
+    'api/upgradeRoutes.ts'
+  ]);
 
   function walk(dir: string): void {
     try {
@@ -228,6 +252,12 @@ async function buildFileIndex(rootDir: string): Promise<string[]> {
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
           if (SCAN_EXTENSIONS.has(ext)) {
+            // Check Immortal Core Sandbox Blacklist
+            const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+            if (PROTECTED_CORE_FILES.has(relativePath)) {
+              continue;
+            }
+            
             try {
               const stat = fs.statSync(fullPath);
               if (stat.size <= MAX_FILE_SIZE_BYTES) {
@@ -525,9 +555,16 @@ async function scanBatch(rootDir: string, ignoreIdle: boolean = false): Promise<
   // Build index on first run
   if (!_initialized || _fileIndex.length === 0) {
     _fileIndex = await buildFileIndex(rootDir);
-    _scanCursor = 0;
+    try {
+      const { getSetting } = await import('../database/db.js');
+      const savedCursor = getSetting('upgrade_scan_cursor');
+      _scanCursor = savedCursor ? parseInt(savedCursor, 10) : 0;
+      if (isNaN(_scanCursor) || _scanCursor >= _fileIndex.length) _scanCursor = 0;
+    } catch {
+      _scanCursor = 0;
+    }
     _initialized = true;
-    log.info(`File index built: ${_fileIndex.length} files to scan`);
+    log.info(`File index built: ${_fileIndex.length} files to scan (Resuming cursor: ${_scanCursor})`);
   }
 
   // Wrap around if we've scanned everything
@@ -535,6 +572,11 @@ async function scanBatch(rootDir: string, ignoreIdle: boolean = false): Promise<
     _scanCursor = 0;
     log.info('Full scan cycle complete — restarting from beginning');
   }
+
+  // Persist cursor dynamically ahead of processing
+  import('../database/db.js').then(({ setSetting }) => {
+    setSetting('upgrade_scan_cursor', String(_scanCursor));
+  }).catch(() => {});
 
   const batch = _fileIndex.slice(_scanCursor, _scanCursor + SCAN_BATCH_SIZE);
   let totalFindings = 0;
@@ -735,7 +777,25 @@ export async function implementProposalById(id: number, rootDir: string): Promis
   if (!proposal) return false;
 
   const fileName = path.basename(proposal.file_path);
-  log.info(`Implementing proposal #${proposal.id}: ${proposal.title}`);
+  const relativePath = proposal.file_path.replace(/\\/g, '/');
+  
+  // 🛡️ Immortal Core Sandbox Hard-Blocker
+  // Failsafe in case a proposal targeting a core file was generated manually or pre-dates the blacklist
+  const PROTECTED_CORE_FILES = new Set([
+    'index.ts', 'config.ts', 'configValidator.ts', 'queue.js',
+    'database/db.ts', 'database/db.js',
+    'evolution/selfUpgrade.ts', 'evolution/selfReflection.ts',
+    'terminal/terminalGateway.ts', 'api/socketHandlers.ts', 'api/upgradeRoutes.ts'
+  ]);
+  
+  if (PROTECTED_CORE_FILES.has(relativePath)) {
+    log.warn(`[SelfUpgrade] Hard-blocked implementation of proposal #${proposal.id} because "${relativePath}" is an Immortal Core Sandbox file.`);
+    db.prepare(`UPDATE upgrade_proposals SET status = 'rejected', description = description || ? WHERE id = ?`)
+      .run(`\n\n[System Failsafe]: Rejected. This file (${relativePath}) is part of the Protected Core Server Infrastructure and cannot be auto-upgraded to prevent unrecoverable Node.js crashes.`, id);
+    return false;
+  }
+
+  console.log(`\x1b[36m[SelfUpgrade] Proposal #${proposal.id} : ${proposal.title}\x1b[0m`);
 
   const fullPath = path.resolve(rootDir, proposal.file_path);
   let originalContent = '';
@@ -755,6 +815,7 @@ CRITICAL RULES:
 2. When replacing code, do NOT replace the entire file. Use surgical precision. Target only the relevant small blocks.
 3. If fixing TypeScript errors or "any" types, you MUST match the existing imports. Do NOT define conflicting local interfaces if an interface is already imported from another file.
 4. Code must compile via \`tsc\` perfectly. Ensure no mismatching signatures.
+5. IF you are modifying an interface or changing required properties (e.g. from snake_case to camelCase), you MUST think about where else this interface is initialized. If you do not have visibility into the rest of the project, DO NOT RENAME PROPERTIES that will break the build (TS2345). Alternatively, make them optional if it's safe.
 
 [STEP 1: PLAN & THINK]
 Before modifying the code, output a <think> block explaining your surgical edit. Double-check your type definitions.
@@ -866,9 +927,15 @@ ${originalContent}
             await verifyUpgrade(rootDir, id);
           } catch (tscErr: any) {
              const errMsg = typeof tscErr.stdout === 'string' ? tscErr.stdout : tscErr.message;
-             log.warn(`[Environmental Feedback] TSC rejected the fix for #${proposal.id}. Reverting.`);
+             
+             // Write compiler error to log file instead of polluting standard output
+             const logDir = path.resolve(process.cwd(), '../data/upgrade_logs');
+             if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+             const logFilePath = path.join(logDir, `proposal_${proposal.id}_rejected.log`);
+             fs.writeFileSync(logFilePath, errMsg, 'utf-8');
+             
              fs.writeFileSync(fullPath, originalContent, 'utf-8');
-             throw new Error(`Compiler rejected the fix. The file has been reverted. Errors:\n${errMsg}`);
+             throw new Error(`Compiler rejected the fix. See log: data/upgrade_logs/proposal_${proposal.id}_rejected.log`);
           }
 
           updateProposalStatus(id, 'implemented');
@@ -879,11 +946,9 @@ ${originalContent}
           return true;
         } else {
           lastError = result.error || 'Unknown error';
-          log.warn(`${specialistName} failed implementation of #${proposal.id}: ${lastError}`);
         }
       } catch (err: any) {
         lastError = err.message;
-        log.warn(`Error using ${specialistName} for proposal #${proposal.id}: ${lastError}`);
       }
 
       if (specialistName !== sortedSpecs[sortedSpecs.length - 1]) {
@@ -893,7 +958,6 @@ ${originalContent}
 
     throw new Error(`All implementation specialists failed for proposal #${proposal.id}. Last error: ${lastError}`);
   } catch (err: any) {
-    log.error(`Implementation failed for proposal #${proposal.id}, reverting. Error: ${err.message}`);
     fs.writeFileSync(fullPath, originalContent, 'utf-8');
     db.prepare(`UPDATE upgrade_proposals SET status = 'rejected', description = description || ? WHERE id = ?`)
       .run(`\n\nAuto-Implement Failed: ${err.message}`, id);
@@ -1063,19 +1127,30 @@ export async function exportProposalsToMarkdown(rootDir: string): Promise<void> 
 
 // ── Main Upgrade Cycle ──
 
-async function runUpgradeCycle(rootDir: string): Promise<void> {
-  if (isUpgrading || _paused || !isSystemIdle()) return;
+async function runUpgradeCycle(rootDir: string, forceStart: boolean = false): Promise<void> {
+  if (isUpgrading) return;
+  if (!forceStart && (_paused || !isSystemIdle())) return;
   isUpgrading = true;
 
   try {
     log.info(`Self-upgrade cycle starting (idle ${Math.round((Date.now() - lastUserActivity) / 60000)}min)${DRY_RUN ? ' [DRY RUN]' : ''}`);
     addLog('evolution', 'Self-Upgrade', 'เริ่มรอบสแกนอัตโนมัติ', 'info');
 
-    const scanResult = await scanBatch(rootDir, false);
+    // Queue Zero First: Auto-implement approved or pending proposals
+    // Native Bypass: If user is running a Manual Continuous Scan, they
+    // normally start with `_paused=true` so Auto-Implement is skipped.
+    // If they explicitly unpause, we allow Auto-Implement to run.
+    if (!_paused && !DRY_RUN) {
+      const implemented = await implementPendingProposals(rootDir);
+      if (implemented > 0) {
+        log.info(`[SelfUpgrade] Implemented ${implemented} pending tasks. Yielding scan to next cycle to prevent backlog.`);
+        isUpgrading = false;
+        return;
+      }
+    }
+
+    const scanResult = await scanBatch(rootDir, forceStart);
     const llmFindings = await analyzeBatchWithLLM(rootDir, scanResult.batchProcessed);
-    
-    // Auto-implement approved or pending proposals
-    const implemented = await implementPendingProposals(rootDir);
     
     // Discover tools
     const toolProposals = await discoverToolOpportunities(rootDir, scanResult.batchProcessed);
@@ -1136,23 +1211,34 @@ export function startSelfUpgrade(rootDir: string): void {
     lastUserActivity = Date.now();
 
     upgradeInterval = setInterval(() => {
-      runUpgradeCycle(rootDir).catch(err => {
+      runUpgradeCycle(rootDir, false).catch(err => {
         log.error('Upgrade cycle error', { error: String(err) });
       });
     }, CHECK_INTERVAL_MS);
 
-    // --- Batch implementation resume logic (Auto-Upgrade All) ---
+    // --- Persistent State Restoration ---
     try {
       const dbModule = await import('../database/db.js');
-      const isBatching = dbModule.getSetting('upgrade_implement_all');
       
+      // 1. Restore Continuous Scan State
+      const isContinuous = dbModule.getSetting('upgrade_continuous_scan');
+      if (isContinuous === 'true') {
+        log.info('[SelfUpgrade] Resuming Continuous Scan mode after server restart...');
+        // Only flip _paused externally if you want it explicitly paused on boot,
+        // but since they left it ON, it should resume with _paused = true (default for manual scans)
+        _paused = true; 
+        executeContinuousStart(rootDir);
+      }
+      
+      // 2. Resume Batch Implementation (Queue Zero)
+      const isBatching = dbModule.getSetting('upgrade_implement_all');
       if (isBatching === 'true') {
         import('./selfUpgrade.js').then(({ resumeBatchImplementation }) => {
            resumeBatchImplementation(rootDir);
         });
       }
     } catch (err: any) {
-      log.warn(`[SelfUpgrade] Failed to check/resume batch implementation: ${err.message}`);
+      log.warn(`[SelfUpgrade] Failed to restore state from DB: ${err.message}`);
     }
   });
 }
@@ -1164,6 +1250,11 @@ export function stopSelfUpgrade(): void {
     upgradeInterval = null;
     log.info('Self-Upgrade System stopped');
   }
+  if (_continuousScanTimeout) {
+    clearTimeout(_continuousScanTimeout);
+    _continuousScanTimeout = null;
+  }
+  _isManualScanActive = false;
 }
 
 /** Toggle pause status of the self-upgrade loop */
@@ -1182,14 +1273,16 @@ export function getUpgradeStatus(): {
   checkIntervalMs: number;
   scanProgress: { cursor: number; total: number; percent: number };
   dryRun: boolean;
+  isContinuousActive: boolean;
 } {
   const idleMs = getOsIdleTimeMs();
   const total = _fileIndex.length || 1;
   return {
-    running: !!upgradeInterval,
+    running: !!upgradeInterval || !!_continuousScanTimeout,
+    isContinuousActive: !!_continuousScanTimeout,
     paused: _paused,
-    isIdle: isSystemIdle(),
-    idleMinutes: Math.round(idleMs / 60000),
+    isIdle: _isManualScanActive ? false : isSystemIdle(), // Manual scan doesn't count as "Idle" system
+    idleMinutes: _isManualScanActive ? 0 : Math.round(idleMs / 60000), // Stop showing huge/fake idle times during manual scan
     idleThresholdMinutes: Math.round(IDLE_THRESHOLD_MS / 60000),
     checkIntervalMs: CHECK_INTERVAL_MS,
     scanProgress: {
@@ -1224,7 +1317,7 @@ export async function updateUpgradeConfig(config: { intervalMs?: number, idleThr
   }
 }
 
-/** Force a scan cycle (for testing / dashboard button) */
+/** Force a single scan cycle (Legacy endpoint) */
 export async function forceScan(rootDir: string): Promise<{ totalFindings: number; newFindings: number }> {
   if (isUpgrading) return { totalFindings: 0, newFindings: 0 };
   isUpgrading = true;
@@ -1238,4 +1331,59 @@ export async function forceScan(rootDir: string): Promise<{ totalFindings: numbe
   } finally {
     isUpgrading = false;
   }
+}
+
+/**
+ * Internal logic to start the Continuous Scan loop securely.
+ */
+function executeContinuousStart(rootDir: string): void {
+  _isManualScanActive = true;
+  if (_continuousScanTimeout) return;
+  
+  const cycle = async () => {
+    // Yield to bot interaction safely
+    if (Date.now() - lastUserActivity < 60000 && !_isManualScanActive) {
+      log.info('Continuous scan yielding gracefully due to user bot interaction');
+      _continuousScanTimeout = null;
+      return;
+    }
+    
+    try {
+      await runUpgradeCycle(rootDir, true);
+    } catch (err: any) {
+      log.warn(`Continuous scan cycle error: ${err.message}`);
+    }
+
+    // Schedule next batch safely in 5 seconds
+    _continuousScanTimeout = setTimeout(cycle, 5000);
+  };
+  
+  // Kick off first cycle immediately
+  _continuousScanTimeout = setTimeout(cycle, 100);
+}
+
+/** 
+ * Toggle Continuous Scan Loop
+ * Starts or stops the native continuous scan batch.
+ */
+export async function toggleContinuousScan(rootDir: string): Promise<boolean> {
+  const { setSetting } = await import('../database/db.js');
+
+  if (_continuousScanTimeout) {
+    clearTimeout(_continuousScanTimeout);
+    _continuousScanTimeout = null;
+    _isManualScanActive = false;
+    setSetting('upgrade_continuous_scan', 'false');
+    log.info('Continuous scan mode stopped explicitly.');
+    return false;
+  }
+
+  // Set Paused = true so that Auto-Upgrade yields natively in Dashboard UI
+  _paused = true;
+  setSetting('upgrade_continuous_scan', 'true');
+  
+  log.info('Continuous scan mode requested');
+  executeContinuousStart(rootDir);
+  
+  return true;
 }

@@ -92,11 +92,7 @@ chatRoutes.post('/chat/reply', validateBody(chatReplySchema), asyncHandler(async
 
   const aiMessages = buildChatMessages(
     personaConfig.systemInstruction,
-    {
-      recentMessages: memCtx.workingMessages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      summaryMarkdown: '',
-      userProfileMarkdown: memCtx.coreMemoryText,
-    },
+    memCtx,
     message,
   );
 
@@ -214,11 +210,7 @@ chatRoutes.post('/chat/stream', validateBody(chatReplySchema), async (req, res) 
     }
 
     const personaConfig = personaManager.loadPersona('fb-extension');
-    const aiMessages = buildChatMessages(personaConfig.systemInstruction, {
-      recentMessages: memCtx.workingMessages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      summaryMarkdown: '',
-      userProfileMarkdown: memCtx.coreMemoryText,
-    }, message);
+    const aiMessages = buildChatMessages(personaConfig.systemInstruction, memCtx, message);
 
     if (memCtx.archivalFacts.length > 0) {
       const archivalNote = `\n[Archival Memory]: ${memCtx.archivalFacts.join(' | ')}`;

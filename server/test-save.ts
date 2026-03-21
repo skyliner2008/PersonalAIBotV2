@@ -1,0 +1,1 @@
+import { initDb } from './src/database/db.js'; initDb().then(async () => { const { KeyManager } = await import('./src/providers/keyManager.js'); const { getProviderApiKey } = await import('./src/config/settingsSecurity.js'); await KeyManager.setKey('openai', 'sk-proj-NEW-SUPER-SECRET-KEY'); console.log('Saved key.'); console.log('Retrieved: ' + getProviderApiKey('openai')); });

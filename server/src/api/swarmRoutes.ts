@@ -670,7 +670,7 @@ router.post('/meeting/start', async (req, res) => {
     }
 
     let agentInstance: Agent | undefined;
-    try { agentInstance = new Agent(process.env.GEMINI_API_KEY || ''); } catch (e) { console.warn('[SwarmRoutes] Agent init failed:', String(e)); }
+    try { agentInstance = new Agent(); } catch (e) { console.warn('[SwarmRoutes] Agent init failed:', String(e)); }
 
     const placeholderId = `meeting_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const placeholder: MeetingSession = {

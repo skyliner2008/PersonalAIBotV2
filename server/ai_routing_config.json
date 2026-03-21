@@ -3,66 +3,24 @@
   "routes": {
     "general": {
       "active": {
-        "provider": "gemini",
-        "modelName": "gemini-2.0-flash"
+        "provider": "minimax",
+        "modelName": "MiniMax-M2.7"
       },
       "fallbacks": []
     },
     "complex": {
       "active": {
-        "provider": "gemini",
-        "modelName": "gemini-2.5-flash"
+        "provider": "minimax",
+        "modelName": "MiniMax-M2.7"
       },
-      "fallbacks": [
-        {
-          "provider": "gemini",
-          "modelName": "gemini-3.1-pro-preview"
-        },
-        {
-          "provider": "openai",
-          "modelName": "gpt-5.4-pro"
-        },
-        {
-          "provider": "openai",
-          "modelName": "gpt-4o"
-        },
-        {
-          "provider": "anthropic",
-          "modelName": "claude-sonnet-4-6"
-        },
-        {
-          "provider": "minimax",
-          "modelName": "MiniMax-M2.5"
-        }
-      ]
+      "fallbacks": []
     },
     "vision": {
       "active": {
-        "provider": "gemini",
-        "modelName": "gemini-2.0-flash"
+        "provider": "minimax",
+        "modelName": "MiniMax-M2.7"
       },
-      "fallbacks": [
-        {
-          "provider": "gemini",
-          "modelName": "gemini-2.5-flash"
-        },
-        {
-          "provider": "openai",
-          "modelName": "gpt-4o-mini"
-        },
-        {
-          "provider": "openai",
-          "modelName": "gpt-4o"
-        },
-        {
-          "provider": "gemini",
-          "modelName": "gemini-1.5-pro"
-        },
-        {
-          "provider": "xai",
-          "modelName": "grok-2"
-        }
-      ]
+      "fallbacks": []
     },
     "web": {
       "active": {
@@ -74,7 +32,7 @@
     "thinking": {
       "active": {
         "provider": "gemini",
-        "modelName": "gemini-2.5-pro"
+        "modelName": "gemini-3-flash-preview"
       },
       "fallbacks": []
     },
@@ -88,33 +46,33 @@
     "data": {
       "active": {
         "provider": "gemini",
-        "modelName": "gemini-2.0-flash"
+        "modelName": "gemini-2.5-flash"
       },
       "fallbacks": []
     },
     "system": {
       "active": {
         "provider": "gemini",
-        "modelName": "gemini-2.5-pro"
+        "modelName": "gemini-2.5-flash"
       },
       "fallbacks": []
     }
   },
   "botOverrides": {
     "env-telegram": {
-      "autoRouting": true,
+      "autoRouting": false,
       "routes": {
         "general": {
           "active": {
-            "provider": "kilo-cli",
-            "modelName": "kilo-auto/free"
+            "provider": "gemini",
+            "modelName": "gemini-2.0-flash"
           },
           "fallbacks": []
         },
         "complex": {
           "active": {
-            "provider": "gemini-cli",
-            "modelName": "gemini-2.5-flash"
+            "provider": "gemini",
+            "modelName": "gemini-2.0-flash"
           },
           "fallbacks": []
         },
@@ -152,17 +110,22 @@
         },
         "thinking": {
           "active": {
-            "provider": "gemini",
-            "modelName": "gemini-3.1-pro-preview"
+            "provider": "minimax",
+            "modelName": "MiniMax-M2.7"
           },
           "fallbacks": []
         },
         "code": {
           "active": {
-            "provider": "openai-cli",
-            "modelName": "gpt-5.3-codex"
+            "provider": "gemini",
+            "modelName": "gemini-2.5-flash"
           },
-          "fallbacks": []
+          "fallbacks": [
+            {
+              "provider": "openai",
+              "modelName": "gpt-4o"
+            }
+          ]
         },
         "data": {
           "active": {

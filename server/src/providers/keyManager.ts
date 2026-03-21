@@ -54,10 +54,7 @@ export class KeyManager {
       const dbKey = this.getKeyFromDb(providerId);
       if (dbKey) return dbKey;
 
-      // 2. Fallback to .env
-      const envKey = process.env[provider.apiKeyEnvVar];
-      if (envKey) return envKey;
-
+      // No .env fallback - force Database ONLY as single source of truth
       return null;
     } catch (error) {
       log.error('Failed to get key', { providerId, error: String(error) });

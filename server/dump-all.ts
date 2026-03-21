@@ -1,0 +1,1 @@
+import { initDb, getDb, getCredential } from './src/database/db.js'; initDb().then(() => { const rows = getDb().prepare('SELECT key FROM settings').all(); rows.forEach(r => { if (r.key.includes('key')) console.log(r.key + ' -> ' + (getCredential(r.key) || '').slice(-8)); }); });

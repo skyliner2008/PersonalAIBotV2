@@ -2,7 +2,7 @@
 // Bots API Router - /api/bots/*
 // ============================================================
 
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import {
   listBots,
   getBot,
@@ -30,16 +30,63 @@ export interface BotConfig {
 const router = Router();
 router.use(requireReadWriteAuth('viewer'));
 
-function syncBotConfig(botId: string, config: any) {
+/**
+ * Helper to remove sensitive credential values from bot objects.
+ * Handles both single bot objects and arrays of bots.
+ */
+function maskBot<T>(data: T): T {
+  const mask = (bot: any) => {
+    if (!bot || typeof bot !== 'object') return bot;
+    const safe = { ...bot };
+    if (safe.credentials && typeof safe.credentials === 'object') {
+      safe.credentials = Object.fromEntries(
+        Object.entries(safe.credentials).map(([k, v]) => [k, v ? '********' : ''])
+      );
+    }
+    return safe;
+  };
+
+  if (Array.isArray(data)) return (data as any).map(mask);
+  return mask(data);
+}
+
+function syncBotConfig(botId: string, config: BotConfig | null | undefined) {
   if (config && typeof config === 'object') {
-    if (config.modelOverrides || config.autoRouting !== undefined) {
-      configManager.updateBotConfig(botId, {
-        autoRouting: config.autoRouting,
-        routes: config.modelOverrides
-      });
+    const { autoRouting, modelOverrides } = config;
+    if (autoRouting !== undefined || modelOverrides !== undefined) {
+      // Create a clean payload object to avoid side effects or reference sharing with the original config
+      const updatePayload: { autoRouting?: boolean; routes?: Record<string, any> } = {};
+      if (autoRouting !== undefined) updatePayload.autoRouting = autoRouting;
+      if (modelOverrides !== undefined) {
+        updatePayload.routes = { ...modelOverrides };
+      }
+
+      configManager.updateBotConfig(botId, updatePayload);
       agentEvents.modelUpdated({ botId });
     }
   }
+}
+
+/**
+ * Helper to get the effective config for a bot, merging DB stored config 
+ * with runtime config from configManager.
+ */
+function getBotEffectiveConfig(bot: any) {
+  const botRouteCfg = configManager.getBotConfig(bot.id);
+  const autoRouting = botRouteCfg?.autoRouting ?? (bot.config as BotConfig)?.autoRouting ?? true;
+  const modelOverrides = botRouteCfg?.routes ?? (bot.config as BotConfig)?.modelOverrides ?? {};
+  return { autoRouting, modelOverrides };
+}
+
+/**
+ * Unified error response handler.
+ */
+function handleError(res: Response, err: unknown, context?: string) {
+  const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+  if (context) {
+    console.error(`[BotsRouter] ${context}:`, message);
+  }
+  res.status(500).json({ error: message });
 }
 
 /**
@@ -50,17 +97,9 @@ router.get('/', (req, res) => {
   try {
     const platform = req.query.platform as BotPlatform | undefined;
     const bots = listBots(platform);
-    // Mask credentials in response
-    const safe = bots.map(b => ({
-      ...b,
-      credentials: Object.fromEntries(
-        Object.entries(b.credentials).map(([k, v]) => [k, v ? '********' : ''])
-      ),
-    }));
-    res.json(safe);
+    res.json(bots.map(maskBot));
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
-    res.status(500).json({ error: message });
+    handleError(res, err, 'Error listing bots');
   }
 });
 
@@ -85,15 +124,9 @@ router.get('/:id', (req, res) => {
   try {
     const bot = getBot(req.params.id);
     if (!bot) return res.status(404).json({ error: 'Bot not found' });
-    const safe = {
-      ...bot,
-      credentials: Object.fromEntries(
-        Object.entries(bot.credentials).map(([k, v]) => [k, v ? '********' : ''])
-      ),
-    };
-    res.json(safe);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.json(maskBot(bot));
+  } catch (err: unknown) {
+    handleError(res, err, `Error getting bot ${req.params.id}`);
   }
 });
 
@@ -114,8 +147,8 @@ router.post('/', (req, res) => {
     }
     const bot = createBot({ id, name, platform, credentials, persona_id, enabled_tools, config });
     res.status(201).json(bot);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -132,8 +165,8 @@ router.put('/:id', (req, res) => {
     syncBotConfig(bot.id, updates.config);
 
     res.json(bot);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -148,8 +181,8 @@ router.delete('/:id', (req, res) => {
     const ok = deleteBot(req.params.id);
     if (!ok) return res.status(404).json({ error: 'Bot not found' });
     res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -175,8 +208,8 @@ router.post('/:id/toggle', (req, res) => {
       }
       res.json(updated);
     }
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -188,8 +221,8 @@ router.get('/:id/tools', (req, res) => {
   try {
     const tools = getBotToolNames(req.params.id);
     res.json(tools);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -204,8 +237,8 @@ router.put('/:id/tools', (req, res) => {
     if (!Array.isArray(tools)) return res.status(400).json({ error: 'tools must be an array' });
     setBotTools(req.params.id, tools);
     res.json({ success: true, tools });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
@@ -254,62 +287,52 @@ router.get('/:id/models', (req, res) => {
       autoRouting,
       modelConfig,
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 
 /**
  * PUT /api/bots/:id/models
  * Set per-bot model override for a specific task type or toggle autoRouting.
- * Body: { taskType?: string, provider?: string, modelName?: string, autoRouting?: boolean }
  */
 router.put('/:id/models', (req, res) => {
   try {
-    const bot = getBot(req.params.id);
-    if (!bot) return res.status(404).json({ error: 'Bot not found' });
-
+    const { id } = req.params;
     const { taskType, provider, modelName, autoRouting } = req.body;
-    const currentConfig = (bot.config ?? {}) as Record<string, any>;
 
-    if (autoRouting !== undefined) {
-      currentConfig.autoRouting = !!autoRouting;
-    }
+    const config: BotConfig = {};
+    if (autoRouting !== undefined) config.autoRouting = !!autoRouting;
 
     if (taskType) {
-      // Validate task type
       if (!Object.values(TaskType).includes(taskType as TaskType)) {
-        return res.status(400).json({ error: `Invalid taskType. Must be one of: ${Object.values(TaskType).join(', ')}` });
+        return res.status(400).json({ error: `Invalid taskType: ${taskType}` });
       }
 
-      const modelOverrides = (currentConfig.modelOverrides ?? {}) as Record<string, any>;
-
-      if (provider === null || provider === '') {
-        // Remove override - revert to global
-        delete modelOverrides[taskType];
-      } else if (provider) {
-        const providerDef = getAgentCompatibleProvider(provider);
-        if (!providerDef) {
-          return res.status(400).json({ error: `provider "${provider}" is not supported for AI agent routing` });
-        }
-
-        const resolvedModelName = (modelName || providerDef.defaultModel || '').trim();
+      const overrides: Record<string, any> = {};
+      if (provider) {
+        const pDef = getAgentCompatibleProvider(provider);
+        if (!pDef) return res.status(400).json({ error: `Unsupported provider: ${provider}` });
+        
+        const resolvedModelName = (modelName || pDef.defaultModel || '').trim();
         if (!resolvedModelName) {
-          return res.status(400).json({ error: 'modelName is required when setting a provider without a default model' });
+          return res.status(400).json({ error: 'modelName is required (no default found for provider)' });
         }
-
-        modelOverrides[taskType] = { provider: providerDef.id, modelName: resolvedModelName };
+        overrides[taskType] = { provider: pDef.id, modelName: resolvedModelName };
+      } else {
+        // Signal removal of override
+        overrides[taskType] = null;
       }
-      currentConfig.modelOverrides = modelOverrides;
+      config.modelOverrides = overrides;
     }
 
-    const updates: Record<string, any> = { config: currentConfig };
+    const updated = updateBot(id, { config });
+    if (!updated) return res.status(404).json({ error: 'Bot not found' });
 
-    const updated = updateBot(req.params.id, updates);
-    syncBotConfig(bot.id, updates.config);
+    syncBotConfig(id, config);
     res.json({ success: true, bot: updated });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    handleError(res, err);
   }
 });
 

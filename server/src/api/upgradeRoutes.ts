@@ -9,7 +9,7 @@ import {
   updateProposalStatus,
   deleteProposal,
   getUpgradeStatus,
-  forceScan,
+  toggleContinuousScan,
   notifyUserActivity,
 } from '../evolution/selfUpgrade.js';
 import type { ProposalStatus, ProposalType } from '../evolution/selfUpgrade.js';
@@ -102,12 +102,12 @@ router.get('/proposals/:id/diff', asyncHandler(async (req, res) => {
   }
 }));
 
-// POST /api/upgrade/scan — บังคับสแกนรอบเดียว (สำหรับทดสอบ)
+// POST /api/upgrade/scan — เปิด/ปิด โหมดสแกนต่อเนื่อง (Continuous Scan Toggle)
 router.post('/scan', asyncHandler(async (_req, res) => {
   const rootDir = path.resolve(process.cwd(), 'src');
   try {
-    const result = await forceScan(rootDir);
-    res.json({ ok: true, findings: result.totalFindings, newFindings: result.newFindings, message: `Scanned batch, found ${result.totalFindings} issues` });
+    const isActive = toggleContinuousScan(rootDir);
+    res.json({ ok: true, message: isActive ? `Continuous Scan started` : `Continuous Scan stopped`, isActive });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }

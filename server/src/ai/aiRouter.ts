@@ -61,7 +61,6 @@ class RegistryAIProviderAdapter implements AIProvider {
   public readonly id: string;
   public readonly name: string;
   private readonly providerDef: ReturnType<typeof getAgentCompatibleProvider>;
-  private runtimeProvider: ReturnType<typeof createAgentRuntimeProvider> | null = null;
 
   constructor(private readonly providerId: string) {
     const provider = getAgentCompatibleProvider(providerId);
@@ -78,14 +77,11 @@ class RegistryAIProviderAdapter implements AIProvider {
   }
 
   private getRuntimeProvider() {
-    if (!this.runtimeProvider) {
-      const runtimeProvider = createAgentRuntimeProvider(this.providerId);
-      if (!runtimeProvider) {
-        throw new ProviderConfigurationError(`Provider "${this.providerId}" is not configured or unavailable`);
-      }
-      this.runtimeProvider = runtimeProvider;
+    const runtimeProvider = createAgentRuntimeProvider(this.providerId);
+    if (!runtimeProvider) {
+      throw new ProviderConfigurationError(`Provider "${this.providerId}" is not configured or unavailable`);
     }
-    return this.runtimeProvider;
+    return runtimeProvider;
   }
 
   private getDefaultModel(): string {

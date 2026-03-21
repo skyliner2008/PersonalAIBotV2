@@ -142,7 +142,7 @@ export class LiveVideoClient extends EventEmitter {
     this.ws = new WebSocket(url);
 
     this.ws.on('open', () => {
-      console.log('[LiveVoice] WebSocket connection established.');
+      logger.info('WebSocket connection established.');
       this.isConnected = true;
       // NOTE: reconnectAttempts is reset in handleMessage on setupComplete,
       // NOT here — because quota errors arrive after open but before setup completes.

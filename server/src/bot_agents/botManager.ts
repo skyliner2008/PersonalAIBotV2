@@ -55,7 +55,7 @@ function getAiAgent(): Agent | null {
     }
 
     try {
-        aiAgent = new Agent(process.env.GEMINI_API_KEY || '');
+        aiAgent = new Agent();
         return aiAgent;
     } catch (err) {
         console.error('[BotManager] Failed to initialize shared AI Agent:', err);

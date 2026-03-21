@@ -10,6 +10,7 @@ import { GeminiProvider } from '../bot_agents/providers/geminiProvider.js';
 import { OpenAICompatibleProvider } from '../bot_agents/providers/openaiCompatibleProvider.js';
 import { AnthropicProvider } from '../bot_agents/providers/anthropicProvider.js';
 import type { AIProvider as AgentRuntimeProvider } from '../bot_agents/providers/baseProvider.js';
+import { CLIProvider } from '../bot_agents/providers/cliProvider.js';
 import { refreshOAuthToken } from './oauthDetector.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -90,6 +91,11 @@ export function createAgentRuntimeProvider(
     }
   }
 
+  // For providers that don't need auth (like CLI tools), inject a dummy key
+  if (!resolvedKey && !provider.requiresAuth) {
+    resolvedKey = 'sk-no-key-required';
+  }
+
   if (!resolvedKey) {
     return null;
   }
@@ -106,6 +112,12 @@ export function createAgentRuntimeProvider(
       project,
       location,
     });
+  }
+
+  // Intercept CLI tool providers before routing to REST handlers
+  if (providerId.endsWith('-cli')) {
+      const toolName = providerId.replace('-cli', '');
+      return new CLIProvider(toolName, providerId) as any;
   }
 
   switch (provider.type) {

@@ -1,0 +1,1 @@
+import { initDb } from './src/database/db.js'; initDb().then(async () => { const { getProviderApiKey } = await import('./src/config/settingsSecurity.js'); console.log('OpenAI Key: ...' + (getProviderApiKey('openai') || '').slice(-8)); });

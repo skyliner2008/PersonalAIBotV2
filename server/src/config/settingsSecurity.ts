@@ -145,17 +145,7 @@ export function resolveProviderApiKey(providerId: string): ProviderApiKeyResolut
     return { key: managedKey, source: 'db' };
   }
 
-  const provider = getProvider(providerId);
-  if (!provider?.apiKeyEnvVar) {
-    return { key: null, source: 'none' };
-  }
-
-  const envValue = process.env[provider.apiKeyEnvVar];
-  const key = envValue?.trim() ? envValue : null;
-  if (!key) {
-    return { key: null, source: 'none', envVar: provider.apiKeyEnvVar };
-  }
-  return { key, source: 'env', envVar: provider.apiKeyEnvVar };
+  return { key: null, source: 'none' };
 }
 
 function getLegacyAiProviderId(key: string): string | null {

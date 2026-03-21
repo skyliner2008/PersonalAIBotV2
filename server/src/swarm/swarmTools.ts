@@ -289,7 +289,7 @@ async function handleStartProjectWorkspace(args: any) {
   if (!goal) return '[ERR] goal is required';
 
   try {
-    const agentInstance = new Agent(process.env.GEMINI_API_KEY || '');
+    const agentInstance = new Agent();
     const chatId = `workspace_root_${Date.now()}`;
     const workspaceId = await startNewWorkspace(goal, chatId, agentInstance, maxTurns);
 
@@ -315,7 +315,7 @@ async function handleStartRoundtable(args: any) {
   try {
     let agentInstance: Agent | undefined;
     try {
-      agentInstance = new Agent(process.env.GEMINI_API_KEY || '');
+      agentInstance = new Agent();
     } catch (err: any) { console.warn('Agent instantiation failed for synthesis (optional)', err); }
 
     const session = await startMeeting(objective, {

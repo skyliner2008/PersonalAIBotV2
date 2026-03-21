@@ -136,7 +136,6 @@ export interface EmbeddingProviderStats {
 // ============================================================
 
 export class EmbeddingProvider {
-  private ai: GoogleGenAI;
   private cache: LRUCache;
   private batchQueue: BatchRequest[] = [];
   private batchTimeout: NodeJS.Timeout | null = null;
@@ -146,8 +145,7 @@ export class EmbeddingProvider {
   private failoverCount = 0;
   private modelErrorCount: Record<string, number> = {};
 
-  constructor(apiKey: string, models?: string[]) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(_apiKey: string, models?: string[]) {
     this.cache = new LRUCache(CACHE_MAX_ENTRIES);
     const mergedModels = uniqueModels([...(models || []), ...resolveEmbeddingModelChain()]);
     this.modelChain = mergedModels.length > 0 ? mergedModels : [DEFAULT_PRIMARY_EMBEDDING_MODEL];
@@ -267,9 +265,12 @@ export class EmbeddingProvider {
     const candidates = this.getModelCandidates();
     let lastError: unknown = null;
 
+    const { getProviderApiKey } = await import('../config/settingsSecurity.js');
+    const ai = new GoogleGenAI({ apiKey: getProviderApiKey('gemini') || '' });
+
     for (const model of candidates) {
       try {
-        const result = await this.ai.models.embedContent({
+        const result = await ai.models.embedContent({
           model,
           contents: texts.map((text) => ({
             role: 'user',

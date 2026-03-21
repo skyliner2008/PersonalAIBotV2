@@ -21,9 +21,10 @@ import { setSummarizeProvider } from '../memory/conversationSummarizer.js';
 import { classifyTask, TaskType, getBestModelForTask, type MultiModelConfig } from './config/aiConfig.js';
 import { configManager } from './config/configManager.js';
 import { personaManager } from '../ai/personaManager.js';
-import { GeminiProvider } from './providers/geminiProvider.js';
 import { OpenAICompatibleProvider } from './providers/openaiCompatibleProvider.js';
+import { getProvider, getRegistry } from '../providers/registry.js';
 import type { AIProvider } from './providers/baseProvider.js';
+import { createAgentRuntimeProvider } from '../providers/agentRuntime.js';
 import { shouldReflect, triggerReflection } from '../evolution/selfReflection.js';
 import { runHealthCheck } from '../evolution/selfHealing.js';
 import { buildLearningsContext } from '../evolution/learningJournal.js';
@@ -161,23 +162,18 @@ function finishRun(run: AgentRun, stats: IAgentStats, reply?: string, error?: st
 }
 
 export class Agent {
-  private providers: Record<string, AIProvider>;
-
-  constructor(apiKey: string) {
-    this.providers = {
-      gemini: new GeminiProvider(apiKey),
-      openai: new OpenAICompatibleProvider(process.env.OPENAI_API_KEY || ''),
-      minimax: new OpenAICompatibleProvider(process.env.MINIMAX_API_KEY || '', 'https://api.minimax.io/v1')
-    };
-    const ai = new GoogleGenAI({ apiKey });
+  constructor() {
     import('../memory/embeddingProvider.js').then(module => {
       setEmbeddingProvider(module.embedText);
     }).catch(e => console.error("Failed to inject embedding provider", e));
+
     setSummarizeProvider(async (prompt: string) => {
-      const res = await this.providers.gemini.generateResponse('gemini-2.0-flash-lite',
-        'สรุปบทสนทนาให้กระชับ ไม่เกิน 3 บรรทัด ภาษาไทย',
-        [{ role: 'user', parts: [{ text: prompt }] }]);
-      return res.text?.trim() || '';
+      const p = createAgentRuntimeProvider('gemini');
+      if (p) {
+        const res = await p.generateResponse('gemini-2.0-flash-lite', 'สรุปบทสนทนาให้กระชับ ไม่เกิน 3 บรรทัด ภาษาไทย', [{ role: 'user', parts: [{ text: prompt }] }]);
+        return res.text?.trim() || '';
+      }
+      return '';
     });
   }
 
@@ -247,7 +243,9 @@ export class Agent {
       const sysCtx: SystemToolContext = {
         ctx: ctx || { botId: 'default', botName: 'AI', platform: 'telegram', replyWithFile: async () => '' },
         listModels: (p) => this.getAvailableModels(p),
-        getProviderNames: () => Object.keys(this.providers)
+        getProviderNames: () => {
+          return Object.keys(getRegistry().providers);
+        }
       };
       const allHandlers = getFunctionHandlers(ctx || sysCtx.ctx, sysCtx);
       const activeHandlers: ToolHandlerMap = {};
@@ -268,9 +266,10 @@ export class Agent {
       if (activeTools.length > 5) {
         try {
           const routerPrompt = `You are a tool selector. User said: "${cleanMessage}". Available tools: ${activeTools.map(t => t.name).join(', ')}. Return ONLY a JSON array of max 5 tool names needed. Return [] if none needed. Do NOT use markdown code blocks, just the JSON array.`;
-          const routerContents: Content[] = [{ role: 'user', parts: [{ text: routerPrompt }] }];
-          const routerRes = await this.providers.gemini.generateResponse('gemini-2.0-flash-lite', 'You are a tool selector.', routerContents);
-          if (routerRes.text) {
+          const p = createAgentRuntimeProvider('gemini');
+          if (p) {
+            const routerRes = await p.generateResponse('gemini-2.0-flash-lite', 'You are a tool selector.', [{ role: 'user', parts: [{ text: routerPrompt }] }]);
+            if (routerRes.text) {
              const match = routerRes.text.match(/\[.*?\]/s);
              if (match) {
                  const selected = JSON.parse(match[0]);
@@ -281,6 +280,7 @@ export class Agent {
                      console.log(`[DynamicRouter] Tools reduced to ${activeTools.length}:`, activeTools.map(t=>t.name));
                  }
              }
+            }
           }
         } catch (e) {
           console.warn('[DynamicRouter] Failed, fallback to all tools', String(e));
@@ -413,12 +413,19 @@ export class Agent {
   }
 
   private resolveProvider(config: { provider: string; modelName: string }): { provider: AIProvider | null; providerName: string; modelName: string } {
-    const primary = this.providers[config.provider];
-    if (primary) return { provider: primary, providerName: config.provider, modelName: config.modelName };
+    const pDef = getProvider(config.provider);
+    if (pDef && pDef.enabled) {
+      const p = createAgentRuntimeProvider(config.provider);
+      if (p) return { provider: p, providerName: config.provider, modelName: config.modelName };
+    }
+
     const fallbackChain = this.getFallbackChainFromMd();
     for (const fb of fallbackChain) {
-      const p = this.providers[fb.provider];
-      if (p) return { provider: p, providerName: fb.provider, modelName: fb.model };
+      const fbDef = getProvider(fb.provider);
+      if (fbDef && fbDef.enabled) {
+        const fbP = createAgentRuntimeProvider(fb.provider);
+        if (fbP) return { provider: fbP, providerName: fb.provider, modelName: fb.model };
+      }
     }
     return { provider: null, providerName: 'none', modelName: '' };
   }
@@ -442,20 +449,33 @@ export class Agent {
 
   private async extractFact(chatId: string, userMsg: string, aiMsg: string) {
     try {
-      const res = await this.providers.gemini.generateResponse('gemini-2.0-flash-lite', 'Extract one fact about the user.', [{ role: 'user', parts: [{ text: `U:${userMsg}\nA:${aiMsg}` }] }]);
-      if (res.text && res.text !== 'NONE') await saveArchivalFact(chatId, res.text);
+      const p = createAgentRuntimeProvider('gemini');
+      if (p) {
+        const res = await p.generateResponse('gemini-2.0-flash-lite', 'Extract one fact about the user.', [{ role: 'user', parts: [{ text: `U:${userMsg}\nA:${aiMsg}` }] }]);
+        if (res.text && res.text !== 'NONE') await saveArchivalFact(chatId, res.text);
+      }
     } catch {}
   }
 
   private async extractCoreProfile(chatId: string, userMsg: string, aiMsg: string) {
     try {
-      const res = await this.providers.gemini.generateResponse('gemini-2.0-flash-lite', 'Summarize user profile.', [{ role: 'user', parts: [{ text: `U:${userMsg}\nA:${aiMsg}` }] }]);
-      if (res.text) setCoreMemory(chatId, 'human', res.text);
+      const p = createAgentRuntimeProvider('gemini');
+      if (p) {
+        const res = await p.generateResponse('gemini-2.0-flash-lite', 'Summarize user profile.', [{ role: 'user', parts: [{ text: `U:${userMsg}\nA:${aiMsg}` }] }]);
+        if (res.text) setCoreMemory(chatId, 'human', res.text);
+      }
     } catch {}
   }
 
   public async getAvailableModels(providerName: string): Promise<string[]> {
-    const provider = this.providers[providerName];
-    return provider ? await provider.listModels() : [];
+    try {
+      const p = createAgentRuntimeProvider(providerName);
+      if (p && 'listModels' in p && typeof p.listModels === 'function') {
+        return await p.listModels();
+      }
+      return [];
+    } catch {
+      return [];
+    }
   }
 }

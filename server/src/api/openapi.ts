@@ -323,7 +323,7 @@ export function getOpenAPISpec(): object {
           tags: ['Backup'],
           summary: 'List all backups',
           security: [{ bearerAuth: [] }],
-          responses: { 200: { description: 'Backup list with storage info' } },
+          responses: { 200: { description: 'Backup list with storage info', content: { 'application/json': { schema: { type: 'array', items: { type: 'object', properties: { backupId: { type: 'string' }, size: { type: 'integer' }, createdAt: { type: 'string' } } } } } } } },
         },
       },
 
@@ -344,7 +344,7 @@ export function getOpenAPISpec(): object {
           tags: ['Auth'],
           summary: 'Get current user info',
           security: [{ bearerAuth: [] }],
-          responses: { 200: { description: 'User info' } },
+          responses: { 200: { description: 'User info', content: { 'application/json': { schema: { type: 'object', properties: { userId: { type: 'string' }, username: { type: 'string' }, role: { type: 'string' } } } } } } },
         },
       },
 
@@ -353,13 +353,13 @@ export function getOpenAPISpec(): object {
         get: {
           tags: ['Settings'],
           summary: 'Get all settings',
-          responses: { 200: { description: 'Settings key-value pairs' } },
+          responses: { 200: { description: 'Settings key-value pairs', content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } } } },
         },
         post: {
           tags: ['Settings'],
           summary: 'Update a setting',
           requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { key: { type: 'string' }, value: {} } } } } },
-          responses: { 200: { description: 'Setting updated' } },
+          responses: { 200: { description: 'Setting updated', content: { 'application/json': { schema: { type: 'object', properties: { key: { type: 'string' }, value: {} } } } } } },
         },
       },
     },

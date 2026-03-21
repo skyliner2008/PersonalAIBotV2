@@ -16,6 +16,7 @@ interface UpgradeStatus {
   checkIntervalMs: number;
   scanProgress: { cursor: number; total: number; percent: number };
   dryRun: boolean;
+  isContinuousActive: boolean;
 }
 
 interface ProposalStats {
@@ -116,12 +117,14 @@ export default function SelfUpgrade() {
   }, [fetchData]);
 
   const updateStatus = async (id: number, newStatus: string) => {
+    // Optimistic UI update for instant feedback & preventing request spam
+    setProposals(prev => prev.map(p => p.id === id ? { ...p, status: newStatus } : p));
     try {
       await api.updateUpgradeProposalStatus(id, newStatus);
-      fetchData();
     } catch (err) {
       console.error('Failed to update proposal:', err);
       alert('เกิดข้อผิดพลาดในการอัปเดตสถานะ');
+      fetchData(); // Rollback on failure
     }
   };
 
@@ -155,11 +158,14 @@ export default function SelfUpgrade() {
 
   const deleteProposal = async (id: number) => {
     if (!confirm('ลบ proposal นี้?')) return;
+    
+    // Optimistic UI update
+    setProposals(prev => prev.filter(p => p.id !== id));
     try {
       await api.deleteUpgradeProposal(id);
-      fetchData();
     } catch (err) {
       console.error('Failed to delete proposal:', err);
+      fetchData(); // Rollback on failure
     }
   };
 
@@ -168,11 +174,10 @@ export default function SelfUpgrade() {
     try {
       const data = await api.triggerUpgradeScan();
       if (data) {
-        alert(`สแกนเสร็จ: พบ ${data.findings} รายการ (รายการใหม่ ${data.newFindings || 0} รายการ)`);
         fetchData();
       }
     } finally {
-      setScanning(false);
+      setTimeout(() => setScanning(false), 2000);
     }
   };
 
@@ -285,14 +290,14 @@ export default function SelfUpgrade() {
           <button
             onClick={triggerScan}
             disabled={scanning}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all duration-300 shadow-sm ${
-              scanning 
-                ? 'bg-gray-800 text-gray-500 ring-1 ring-white/10' 
-                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/25 hover:scale-105 active:scale-95'
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs transition-all duration-300 shadow-sm border ${
+              (status.isContinuousActive)
+                ? 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20' 
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/25 hover:scale-105 active:scale-95 border-transparent'
             }`}
           >
-            {scanning ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            <span>{scanning ? 'กำลังสแกน...' : 'สแกนเดี๋ยวนี้'}</span>
+            {(scanning || status.isContinuousActive) ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            <span>{status.isContinuousActive ? 'หยุดสแกนต่อเนื่อง' : 'เปิดสแกนต่อเนื่อง'}</span>
           </button>
         </div>
       </div>
@@ -310,7 +315,7 @@ export default function SelfUpgrade() {
             label="เวลาที่หยุดนิ่ง (Idle)" 
             value={`${status.idleMinutes} นาที`}
             icon={Zap}
-            subValue={status.isIdle ? 'เงื่อนไขครบถ้วน ✅' : `ต้องการ 30 นาที`}
+            subValue={status.isIdle ? 'เงื่อนไขครบถ้วน ✅' : `ต้องการ ${status.idleThresholdMinutes || 5} นาที`}
             color={status.isIdle ? 'text-blue-400' : 'text-gray-400'}
           />
           <div className="bg-gray-900/40 border border-white/5 rounded-lg px-3 py-2 backdrop-blur-sm relative overflow-hidden group flex flex-col justify-center">
@@ -389,6 +394,7 @@ export default function SelfUpgrade() {
                             <typeMeta.icon className="w-4 h-4" />
                           </div>
                           <h3 className="text-sm font-bold text-gray-100 group-hover:text-white transition-colors">
+                            <span className="text-blue-400 font-mono text-xs mr-2 border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 rounded-md">#{p.id}</span>
                             {p.title}
                           </h3>
                           <div className="flex items-center gap-2">
