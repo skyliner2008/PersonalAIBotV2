@@ -100,7 +100,7 @@ Scan → Filter → Validate → Impact Analysis → Learning Feedback → Plann
 
 | Phase | รายละเอียด |
 |-------|-----------|
-| **Scan & Filter** | LLM อ่าน source files (`.ts`/`.tsx`/`.js`/`.jsx` เท่านั้น) ค้นหา concrete bugs ด้วย confidence > 0.7 |
+| **Scan & Map** | LLM อ่าน source files ค้นหา concrete bugs ด้วย confidence > 0.7 พร้อมกับสกัดโครงสร้างไฟล์ (exports/dependencies) เก็บลง `codebase_map` ให้เป็น Second Brain ทันที |
 | **Impact Analysis** | วิเคราะห์ exported symbols → หา caller files ทั้งหมด → กำหนด risk level (safe/moderate/high) |
 | **Learning Feedback** | ดึงบทเรียนจาก Learning Journal (semantic search + same-file rejection history) inject เข้า prompt |
 | **Planning** | LLM วางแผนทีละ step ก่อน implement — สามารถ reject proposal ตั้งแต่ขั้นวางแผนถ้าเสี่ยงเกินไป |
@@ -208,6 +208,7 @@ React 19 + Vite + TailwindCSS dashboard มีหน้าดังนี้:
 | `activity_logs` | Audit trail ทุก action |
 | `settings` | Key-value system configuration |
 | `upgrade_proposals` | Proposals จาก Self-Upgrade scan (title, description, file_path, status, priority, affected_files, impact_analysis) |
+| `codebase_map` | แผนที่โครงสร้างโค้ดประดุจสมองที่ 2 (Second Brain) — เก็บ summary, exports, dependencies ทุกรอบการสแกน |
 | `evolution_log` | บันทึกประวัติ self-upgrade/heal/reflect ทุกครั้ง |
 | `learning_journal` | Persistent learnings (6 categories, confidence, times_applied, vector-indexed) |
 | `processed_messages` | Message dedup cache (ป้องกัน double-process) |

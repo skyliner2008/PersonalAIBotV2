@@ -292,7 +292,7 @@ The autonomous code modification engine. Scans the codebase for bugs/improvement
 
 | Phase | Name | Description |
 |-------|------|-------------|
-| 1 | **Scan** | LLM reads source files in batches of 3, identifies concrete bugs (confidence > 0.7 only) |
+| 1 | **Scan & Map** | LLM reads source files in batches of 3, identifies concrete bugs (confidence > 0.7), and simultaneously extracts architectural blueprints into `codebase_map` |
 | 2 | **Filter** | Rejects non-source files (`.md`, `.txt`, `.css`, test files, docs) at scan and insert time |
 | 3 | **Validate** | Pre-implementation gate: checks file exists, is production source, not in Protected Core |
 | 4 | **Impact Analysis** | Static analysis of exported symbols → finds all caller files → assigns risk level (safe/moderate/high) |
@@ -311,8 +311,8 @@ The autonomous code modification engine. Scans the codebase for bugs/improvement
 
 #### Two-Mode Implementation
 
-- **SINGLE-FILE mode** (risk = safe): Only primary file edited, strict "no signature changes" rule
-- **MULTI-FILE mode** (risk = moderate/high): AI receives dependency map + affected file previews, authorized to edit primary + all dependent files, 4-step process (Plan → Verify → Edit → Check)
+- **SINGLE-FILE mode** (risk = safe): Only primary file edited, strict "no signature changes" rule, injected with Second Brain context
+- **MULTI-FILE mode** (risk = moderate/high): AI receives dependency map + second brain architectural blueprints + affected file previews, authorized to edit primary + all dependent files, 4-step process (Plan → Verify → Edit → Check)
 
 #### Multi-File Backup & Rollback
 
@@ -485,6 +485,7 @@ Additional tables created at runtime:
 - `usage_tracking` — token usage tracking
 - `goal_*` — goal tracker tables
 - `persistent_queue` — crash-safe message queue
+- `codebase_map` — Second Brain architecture map (file_path, summary, exports, dependencies)
 - Bot registry tables
 
 ---
