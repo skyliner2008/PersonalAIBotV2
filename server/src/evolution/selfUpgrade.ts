@@ -26,8 +26,14 @@ const execPromise = util.promisify(exec);
 
 const log = createLogger('SelfUpgrade');
 
-function getUpgradeModel(): string {
+function getImplementModel(): string {
+  // Use premium Code or Agent Model for actual patching/implementation
   return getSetting('ai_task_code_generation_model') || getSetting('ai_task_agent_model') || getSetting('ai_model') || 'gemini-2.0-flash';
+}
+
+function getScanModel(): string {
+  // Use fast, cheaper model for bulk context scanning
+  return getSetting('ai_task_system_model') || getSetting('ai_task_data_model') || getSetting('ai_model') || 'gemini-2.0-flash';
 }
 
 // ── Configuration ──
@@ -897,7 +903,7 @@ Return [] if no real runtime bugs found. Be conservative — false negatives are
 Code:
 ${content}`;
 
-      const modelName = getUpgradeModel();
+      const modelName = getScanModel();
       const response = await aiChat('chat', [{ role: 'user', content: prompt }], { model: modelName });
       llmCalls++;
 
@@ -1275,7 +1281,7 @@ Return JSON (no markdown):
 Max 6 steps. More = too complex = shouldProceed: false.`;
 
   try {
-    const modelName = getUpgradeModel();
+    const modelName = getImplementModel();
     const response = await aiChat('chat', [{ role: 'user', content: planPrompt }], {
       model: modelName,
       maxTokens: 1500,
@@ -1914,7 +1920,7 @@ ${originalContent}
         try {
           const inTokens = Math.floor(prompt.length / 3.5);
           const outTokens = Math.floor((result.result?.length || 0) / 3.5);
-          const agentModel = getUpgradeModel();
+          const agentModel = getImplementModel();
           trackUpgradeTokens(agentModel, inTokens, outTokens);
         } catch (e) { log.warn(`Token tracking estimation failed: ${String(e)}`); }
 
@@ -2191,7 +2197,7 @@ Return purely JSON array. Do not wrap in markdown \`\`\`json. Return [] if no st
 Files context:
 ${combinedContent}`;
 
-    const modelName = getUpgradeModel();
+    const modelName = getScanModel();
     const response = await aiChat('chat', [{ role: 'user', content: prompt }], { model: modelName });
     const match = response.text.match(/\\[[\\s\\S]*\\]/);
     if (match) {
