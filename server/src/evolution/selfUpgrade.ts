@@ -2410,6 +2410,16 @@ export function startSelfUpgrade(rootDir: string): void {
     try {
       const dbModule = await import('../database/db.js');
       
+      // 0. Restore Auto-Upgrade Pause State
+      const isPaused = dbModule.getSetting('upgrade_paused');
+      if (isPaused === 'true') {
+        _paused = true;
+        log.info('[SelfUpgrade] Auto-Upgrade is globally PAUSED from previous session.');
+      } else if (isPaused === 'false') {
+        _paused = false;
+        log.info('[SelfUpgrade] Auto-Upgrade is running normally.');
+      }
+
       // 1. Restore Continuous Scan State
       const isContinuous = dbModule.getSetting('upgrade_continuous_scan');
       if (isContinuous === 'true') {
@@ -2450,6 +2460,9 @@ export function stopSelfUpgrade(): void {
 /** Toggle pause status of the self-upgrade loop */
 export function setUpgradePaused(paused: boolean): void {
   _paused = paused;
+  import('../database/db.js').then(({ setSetting }) => {
+    setSetting('upgrade_paused', paused ? 'true' : 'false');
+  });
   log.info(`Self-Upgrade System ${paused ? 'Paused' : 'Resumed'}`);
 }
 
