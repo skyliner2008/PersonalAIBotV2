@@ -208,13 +208,14 @@ export function ensureUpgradeTable(): void {
     const db = getDb();
     const checkStmt = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='upgrade_proposals'`).get() as { sql: string } | undefined;
     
-    // Auto-migrate if the table exists but has the old restrictive CHECK constraint
-    if (checkStmt && !checkStmt.sql.includes("'implementing'")) {
-      log.info('Migrating upgrade_proposals table to remove CHECK constraint...');
+    // Auto-migrate if the table exists but is missing the new columns or has the restrictive CHECK constraint
+    const currentCols = checkStmt ? (db.prepare(`PRAGMA table_info(upgrade_proposals)`).all() as { name: string }[]).map(c => c.name) : [];
+    
+    if (checkStmt && (!currentCols.includes('affected_files'))) {
+      log.info('Migrating upgrade_proposals table to add new columns and remove CHECK constraint...');
       db.exec(`DROP TABLE IF EXISTS upgrade_proposals_new`); // Clean up from any previous failed migration
 
       // Detect current columns so SELECT matches exactly
-      const currentCols = (db.prepare(`PRAGMA table_info(upgrade_proposals)`).all() as { name: string }[]).map(c => c.name);
       const colList = currentCols.join(', ');
 
       // New table always has the full 15-column schema

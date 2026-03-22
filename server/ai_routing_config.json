@@ -3,19 +3,10 @@
   "routes": {
     "general": {
       "active": {
-        "provider": "minimax",
-        "modelName": "MiniMax-M2.7"
+        "provider": "gemini",
+        "modelName": "gemini-2.0-flash"
       },
-      "fallbacks": [
-        {
-          "provider": "gemini",
-          "modelName": "gemini-2.5-flash"
-        },
-        {
-          "provider": "gemini",
-          "modelName": "gemini-2.0-flash"
-        }
-      ]
+      "fallbacks": []
     },
     "complex": {
       "active": {
@@ -52,14 +43,9 @@
     "web": {
       "active": {
         "provider": "gemini",
-        "modelName": "gemini-2.0-flash"
+        "modelName": "gemini-2.5-flash"
       },
-      "fallbacks": [
-        {
-          "provider": "gemini",
-          "modelName": "gemini-2.5-flash"
-        }
-      ]
+      "fallbacks": []
     },
     "thinking": {
       "active": {
@@ -86,15 +72,10 @@
     },
     "data": {
       "active": {
-        "provider": "gemini",
-        "modelName": "gemini-2.5-flash"
+        "provider": "minimax",
+        "modelName": "MiniMax-M2.7"
       },
-      "fallbacks": [
-        {
-          "provider": "gemini",
-          "modelName": "gemini-2.0-flash"
-        }
-      ]
+      "fallbacks": []
     },
     "system": {
       "active": {
