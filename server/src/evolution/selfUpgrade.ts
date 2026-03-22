@@ -8,7 +8,7 @@
 // 4. เสนอแผนอัพเกรด (ช่วงทดสอบ: เสนอเท่านั้น ไม่ลงมือทำ)
 // 5. ใช้ dynamic model switching ตาม task
 
-import { getDb, addLog, trackUpgradeTokens, getSetting } from '../database/db.js';
+import { getDb, addLog, trackUpgradeTokens, getSetting, upsertCodebaseNode, searchCodebaseMapByDependencies } from '../database/db.js';
 import { createLogger } from '../utils/logger.js';
 import { logEvolution, addLearning } from './learningJournal.js';
 import { aiChat } from '../ai/aiRouter.js';
@@ -896,10 +896,20 @@ YOUR SUGGESTED FIX RULES:
 - Must NOT change function signatures, export names, or interface definitions
 - If unsure → set confidence below 0.5 (it will be auto-filtered)
 
-Respond in pure JSON (no markdown wrapping):
-[{"type":"bug"|"security","title":"Short title","description":"What crashes and when","line_range":"10-15","suggested_fix":"minimal fix code","priority":"medium"|"high"|"critical","confidence":0.0-1.0}]
+Respond in pure JSON (no markdown wrapping) matching exactly this structure:
+{
+  "architecture": {
+    "summary": "Brief 1-2 sentence explanation of this file's purpose",
+    "exports": ["ClassA", "functionB"],
+    "dependencies": ["../database/db", "fs"]
+  },
+  "issues": [
+    {"type":"bug"|"security","title":"Short title","description":"What crashes and when","line_range":"10-15","suggested_fix":"minimal fix code","priority":"medium"|"high"|"critical","confidence":0.0-1.0}
+  ]
+}
 
-Return [] if no real runtime bugs found. Be conservative — false negatives are OK, false positives waste resources.
+If no real runtime bugs are found, return an empty array for "issues": []
+Be conservative — false negatives are OK, false positives waste resources.
 
 Code:
 ${content}`;
@@ -918,33 +928,51 @@ ${content}`;
       const mdMatch = matchText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
       if (mdMatch) matchText = mdMatch[1];
       
-      const bracketMatch = matchText.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (bracketMatch) {
+      try {
+        let parsed: any = null;
         try {
-          const issues = JSON.parse(bracketMatch[0]);
-          if (Array.isArray(issues)) {
-            for (const issue of issues) {
-          const result = insertProposal({
-            type: issue.type || 'refactor',
-            title: issue.title || 'LLM Suggestion',
-            description: issue.description || 'No description provided',
-            file_path: relPath,
-            line_range: issue.line_range || null,
-            suggested_fix: issue.suggested_fix || null,
-            priority: issue.priority || 'medium',
-            status: 'pending',
-            model_used: modelName,
-            confidence: issue.confidence || 0.8
-          });
-          if (result.isNew) llmFindings++;
+          parsed = JSON.parse(matchText);
+        } catch {
+          const objMatch = matchText.match(/\{[\s\S]*\}/);
+          if (objMatch) parsed = JSON.parse(objMatch[0]);
         }
+
+        if (parsed) {
+          // 1. Save Architecture to Second Brain
+          if (parsed.architecture) {
+            upsertCodebaseNode(
+              relPath, 
+              parsed.architecture.summary || '', 
+              Array.isArray(parsed.architecture.exports) ? parsed.architecture.exports : [], 
+              Array.isArray(parsed.architecture.dependencies) ? parsed.architecture.dependencies : []
+            );
+            log.info(`🧠 Mapped codebase node: ${relPath}`);
+          }
+
+          // 2. Process Bug Proposals
+          const issues = Array.isArray(parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
           if (issues.length > 0) {
+            for (const issue of issues) {
+              if (!issue.title && !issue.description) continue;
+              const result = insertProposal({
+                type: issue.type || 'refactor',
+                title: issue.title || 'LLM Suggestion',
+                description: issue.description || 'No description provided',
+                file_path: relPath,
+                line_range: issue.line_range || null,
+                suggested_fix: issue.suggested_fix || null,
+                priority: issue.priority || 'medium',
+                status: 'pending',
+                model_used: modelName,
+                confidence: issue.confidence || 0.8
+              });
+              if (result.isNew) llmFindings++;
+            }
             log.debug(`LLM analyzed ${relPath}: ${issues.length} findings`);
           }
         }
-        } catch (parseErr: any) {
-          log.warn(`LLM returned invalid JSON for ${relPath}. Parse error: ${parseErr.message}`);
-        }
+      } catch (parseErr: any) {
+        log.warn(`LLM returned invalid JSON for ${relPath}. Parse error: ${parseErr.message}`);
       }
     } catch (err: any) {
       const errMsg = err.message || '';
@@ -1247,7 +1275,8 @@ async function createImplementationPlan(
   proposal: UpgradeProposal,
   impact: ImpactReport,
   originalContent: string,
-  learningContext: string
+  learningContext: string,
+  codebaseContext: string
 ): Promise<ImplementationPlan> {
   const planPrompt = `You are a GATEKEEPER deciding whether a code change proposal is safe to auto-implement.
 Your job: REJECT risky proposals and APPROVE only safe ones. When in doubt, REJECT.
@@ -1260,6 +1289,7 @@ Impact risk: ${impact.riskLevel}
 Affected files: ${impact.affectedFiles.length > 0 ? impact.affectedFiles.join(', ') : 'none'}
 Exported symbols at risk: ${impact.exportedSymbols.length > 0 ? impact.exportedSymbols.join(', ') : 'none'}
 ${learningContext ? `\n[Lessons from past failures — MUST consider]:\n${learningContext}` : ''}
+${codebaseContext ? `${codebaseContext}` : ''}
 
 Target file first 100 lines:
 \`\`\`typescript
@@ -1650,9 +1680,35 @@ export async function implementProposalById(id: number, rootDir: string): Promis
     phaseLog('📚 Learning Feedback', 'no relevant lessons found');
   }
 
+  // ── Phase 7.5: Assemble Second Brain Context ──
+  phaseLog('🧠 Second Brain', 'extracting architecture blueprints...');
+  let codebaseContext = '';
+  try {
+    const { getCodebaseContextMap } = await import('../database/db.js');
+    const allNodes = getCodebaseContextMap();
+    const relevantPaths = new Set([relativePath, ...impact.affectedFiles]);
+    const relevantNodes = allNodes.filter(n => relevantPaths.has(n.file_path));
+    
+    if (relevantNodes.length > 0) {
+      codebaseContext = `\n[🧠 CODEBASE ARCHITECTURE MAP]\n`;
+      relevantNodes.forEach(node => {
+        let exportsList = '[]', depsList = '[]';
+        try { exportsList = JSON.parse(node.exports_json).join(', '); } catch {}
+        try { depsList = JSON.parse(node.dependencies_json).join(', '); } catch {}
+        
+        codebaseContext += `File: ${node.file_path}\n - Purpose: ${node.summary || 'N/A'}\n`;
+        if (exportsList !== '[]') codebaseContext += ` - Exports: ${exportsList}\n`;
+        if (depsList !== '[]') codebaseContext += ` - Depends On: ${depsList}\n`;
+      });
+      phaseLog('🧠 Second Brain', `injected map for ${relevantNodes.length} files`);
+    } else {
+      phaseLog('🧠 Second Brain', `no architectural map available yet`);
+    }
+  } catch(e) { /* ignore */ }
+
   // ── Phase 8: Pre-Implementation Planning — วางแผนก่อนลงมือ ──
   phaseLog('📋 Planning', 'AI generating implementation plan...');
-  const plan = await createImplementationPlan(proposal, impact, originalContent, learningContext);
+  const plan = await createImplementationPlan(proposal, impact, originalContent, learningContext, codebaseContext);
 
   if (!plan.shouldProceed) {
     phaseLog('📋 Planning', `REJECTED — ${plan.reason}`);
@@ -1744,7 +1800,7 @@ H. PRESERVE CONTEXT: When using \`replace_code_block\`, include 2-3 unchanged li
 
   const prompt = isMultiFile
     ? `You are a senior Software Engineer AI performing a SURGICAL code fix across multiple files.${traumaContext}
-${learningContext}${planContext}
+${learningContext}${codebaseContext}${planContext}
 🔍 MULTI-FILE MODE — You may edit: "${fileName}" + dependent files listed below.
 ${affectedFilesContext}
 ${importContext}
@@ -1775,7 +1831,7 @@ Primary File Content:
 ${originalContent}
 \`\`\``
     : `You are a senior Software Engineer AI performing a SURGICAL single-file code fix.${traumaContext}
-${learningContext}${planContext}
+${learningContext}${codebaseContext}${planContext}
 📋 SINGLE-FILE MODE — Only edit "${fileName}". No other files.
 ${importContext}
 ${commonSafetyRules}

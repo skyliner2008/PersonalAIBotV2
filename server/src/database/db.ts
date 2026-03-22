@@ -26,6 +26,14 @@ export interface ActivityLog {
   created_at: string;
 }
 
+export interface CodebaseNode {
+  file_path: string;
+  summary: string | null;
+  exports_json: string;      // JSON array string
+  dependencies_json: string; // JSON array string
+  last_scanned: string;
+}
+
 export interface Persona {
   id: string;
   name: string;
@@ -159,8 +167,16 @@ function runMigrations(dbInstance: SqliteDatabase): void {
     )`);
     dbInstance.exec(`CREATE INDEX IF NOT EXISTS idx_evolution_log_type ON evolution_log(action_type, created_at)`);
     dbInstance.exec(`CREATE INDEX IF NOT EXISTS idx_learning_journal_cat ON learning_journal(category, confidence)`);
+
+    dbInstance.exec(`CREATE TABLE IF NOT EXISTS codebase_map (
+      file_path TEXT PRIMARY KEY,
+      summary TEXT,
+      exports_json TEXT DEFAULT '[]',
+      dependencies_json TEXT DEFAULT '[]',
+      last_scanned DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
   } catch (e) {
-    console.warn('[DB migration] unexpected error creating evolution system tables:', String(e));
+    console.warn('[DB migration] unexpected error creating evolution/system tables:', String(e));
   }
 }
 
@@ -177,7 +193,8 @@ function ensureIndexes(dbInstance: SqliteDatabase): void {
     `CREATE INDEX IF NOT EXISTS idx_activity_logs_ts ON activity_logs(created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_core_memory_chat ON core_memory(chat_id, block_label)`,
     `CREATE INDEX IF NOT EXISTS idx_archival_memory_chat ON archival_memory(chat_id, created_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_processed_messages ON processed_messages(created_at)`
+    `CREATE INDEX IF NOT EXISTS idx_processed_messages ON processed_messages(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_codebase_map_scanned ON codebase_map(last_scanned)`
   ];
 
   for (const sql of indexSqls) {
@@ -482,6 +499,33 @@ export function upsertUserProfile(userId: string, displayName: string, facts: st
       total_messages = excluded.total_messages,
       updated_at = datetime('now')
   `, [userId, displayName, JSON.stringify(facts), JSON.stringify(tags), totalMessages]);
+}
+
+// -- Codebase Mapper (Second Brain) --
+export function upsertCodebaseNode(filePath: string, summary: string, exportsArr: string[], depsArr: string[]): void {
+  const normalized = filePath.replace(/\\/g, '/');
+  runSql(getDb(), `
+    INSERT INTO codebase_map (file_path, summary, exports_json, dependencies_json, last_scanned)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(file_path) DO UPDATE SET
+      summary = excluded.summary,
+      exports_json = excluded.exports_json,
+      dependencies_json = excluded.dependencies_json,
+      last_scanned = datetime('now')
+  `, [normalized, summary, JSON.stringify(exportsArr), JSON.stringify(depsArr)]);
+}
+
+export function searchCodebaseMapByDependencies(queryPath: string): CodebaseNode[] {
+  const normalized = queryPath.replace(/\\/g, '/');
+  // Since we don't have a JSON1 extension guarantee, we use a crude LIKE approach for quick lookup
+  return allRows<CodebaseNode>(getDb(), 
+    `SELECT * FROM codebase_map WHERE dependencies_json LIKE ? LIMIT 10`, 
+    [`%${normalized}%`]
+  );
+}
+
+export function getCodebaseContextMap(): CodebaseNode[] {
+  return allRows<CodebaseNode>(getDb(), `SELECT * FROM codebase_map`);
 }
 
 // -- Q&A --
