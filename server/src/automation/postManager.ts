@@ -3,6 +3,7 @@ import { createPost } from './facebook.js';
 import { aiChat } from '../ai/aiRouter.js';
 import { buildContentPrompt } from '../ai/prompts/contentCreator.js';
 import type { Server as SocketServer } from 'socket.io';
+import { notifyUserActivity } from '../evolution/selfUpgrade.js';
 
 export const POST_STATUS_PENDING = 'pending';
 export const POST_STATUS_GENERATING = 'generating';
@@ -105,6 +106,8 @@ export async function processPendingPosts(io: SocketServer): Promise<void> {
       [POST_STATUS_PENDING, now]
     ) as any[];
 
+    if (pendingAi.length > 0) notifyUserActivity();
+
     for (const post of pendingAi) {
       let attempts = 0;
       const maxAttempts = 3;
@@ -145,6 +148,8 @@ export async function processPendingPosts(io: SocketServer): Promise<void> {
       `SELECT id, content, target, target_id FROM scheduled_posts WHERE status = ? AND scheduled_at <= ?`,
       [POST_STATUS_READY, now]
     ) as any[];
+
+    if (readyPosts.length > 0) notifyUserActivity();
 
     for (const post of readyPosts) {
       let attempts = 0;

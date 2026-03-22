@@ -2544,10 +2544,10 @@ function executeContinuousStart(rootDir: string): void {
   if (_continuousScanTimeout) return;
   
   const cycle = async () => {
-    // Yield to bot interaction safely
-    if (Date.now() - lastUserActivity < 60000 && !_isManualScanActive) {
-      log.info('Continuous scan yielding gracefully due to user bot interaction');
-      _continuousScanTimeout = null;
+    // Yield to bot interaction safely honoring the user's configured Idle Threshold
+    if (Date.now() - lastUserActivity < IDLE_THRESHOLD_MS) {
+      // Schedule next check without running upgrade (preserves the continuous scan loop)
+      _continuousScanTimeout = setTimeout(cycle, 5000);
       return;
     }
     

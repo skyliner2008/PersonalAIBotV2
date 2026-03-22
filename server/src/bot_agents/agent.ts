@@ -29,6 +29,7 @@ import { shouldReflect, triggerReflection } from '../evolution/selfReflection.js
 import { runHealthCheck } from '../evolution/selfHealing.js';
 import { buildLearningsContext } from '../evolution/learningJournal.js';
 import { createLogger } from '../utils/logger.js';
+import { notifyUserActivity } from '../evolution/selfUpgrade.js';
 
 const log = createLogger('Agent');
 
@@ -178,6 +179,7 @@ export class Agent {
   }
 
   public processMessage(chatId: string, message: string, ctx: BotContext, attachments?: Part[]): Promise<string> {
+    notifyUserActivity(); // Mark system as active for ANY AI intelligence operation (Chat, Cron, API)
     return enqueueForUser(chatId, () => this._processMessageCore(chatId, message, ctx, attachments));
   }
 
