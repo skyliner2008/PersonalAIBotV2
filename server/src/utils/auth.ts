@@ -78,19 +78,19 @@ function validateCredentials(username: string, password: string): User | null {
     return null;
   }
 
-  log.warn(`[AuthDebug] validateCredentials Attempt -> User: ${username}, SystemAdmin: ${adminUser}, ConfiguredPassExists: ${!!configuredAdminPass}`);
+  // log.info(`[AuthDebug] validateCredentials Attempt -> User: ${username}, SystemAdmin: ${adminUser}, ConfiguredPassExists: ${!!configuredAdminPass}`);
 
   if (configuredAdminPass) {
     // If a password is explicitly set electronically (ENV or DB), require it
     if (username === adminUser && password === configuredAdminPass) {
-      log.warn(`[AuthDebug] SUCCESS via configuredAdminPass`);
+      log.info(`[AuthDebug] SUCCESS via configuredAdminPass`);
       return { username: adminUser, role: 'admin' };
     }
     log.warn(`[AuthDebug] FAILED via configuredAdminPass (password mismatch)`);
   } else {
     // Fallback if completely unconfigured to prevent permanent lock-out
     if (username === adminUser && password === DEFAULT_DEV_ADMIN_PASSWORD) {
-      log.warn(`[AuthDebug] SUCCESS via fallback admin/admin`);
+      log.info(`[AuthDebug] SUCCESS via fallback admin/admin`);
       return { username: adminUser, role: 'admin' };
     }
     log.warn(`[AuthDebug] FAILED via fallback (expected admin/admin)`);

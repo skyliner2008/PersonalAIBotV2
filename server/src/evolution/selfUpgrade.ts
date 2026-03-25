@@ -126,6 +126,8 @@ let _paused = true;  // Default: OFF on first start — user must explicitly ena
 let _scanCursor = 0;     // ตำแหน่งที่สแกนถึง
 let _fileIndex: string[] = [];
 let _initialized = false;
+let _coldBootFlagPath = '';
+
 export async function resumeBatchImplementation(rootDir: string): Promise<void> {
   const db = getDb();
 
@@ -139,6 +141,8 @@ export async function resumeBatchImplementation(rootDir: string): Promise<void> 
   let consecutiveQuotaErrors = 0;
   const MAX_CONSECUTIVE_QUOTA_ERRORS = 3;
   const batchStart = Date.now();
+  
+  clearColdBootFlag();
 
   if (initialApprovedCount > 0) {
     console.log(`\n\x1b[36m╔══════════════════════════════════════════════════════════╗\x1b[0m`);
@@ -3657,6 +3661,7 @@ export async function startSelfUpgrade(rootDir: string): Promise<void> {
 
   ensureUpgradeTable();
   _currentRootDir = rootDir;
+  _coldBootFlagPath = path.resolve(process.cwd(), 'COLD_BOOT.flag');
 
   // Load persisted configuration
   refreshConfig();
@@ -3681,8 +3686,17 @@ export async function startSelfUpgrade(rootDir: string): Promise<void> {
   };
   scheduleNextCycle();
 
-    // --- Persistent State Restoration ---
-    try {
+  // --- Persistent State Restoration ---
+  try {
+    // 0. Check for Cold Boot Flag (Session Safety)
+    const isColdBoot = fs.existsSync(_coldBootFlagPath);
+    if (isColdBoot) {
+      _paused = true;
+      setSetting('upgrade_paused', 'true');
+      setSetting('upgrade_continuous_scan', 'false');
+      log.info(`[SelfUpgrade] 🧊 Cold Boot detected (via flag file). System forced to PAUSED state.`);
+    } else {
+      // Normal Restore (Hot Reload / Atomic Restart)
       // 0. Restore Auto-Upgrade Pause State
       // Default: paused (OFF) unless DB explicitly says 'false'
       const isPaused = getSetting('upgrade_paused');
@@ -3693,8 +3707,9 @@ export async function startSelfUpgrade(rootDir: string): Promise<void> {
         _paused = true;
         log.info(`[SelfUpgrade] Auto-Upgrade is PAUSED (db=${isPaused ?? 'not set'}).`);
       }
+    }
 
-      // 0.5 Restore Auto-Fix State
+    // 0.5 Restore Auto-Fix State
       const autoFix = getSetting('upgrade_auto_fix');
       if (autoFix === 'false') {
         DRY_RUN = true;
@@ -3818,6 +3833,16 @@ export function approveAllPendingProposals(): number {
   }
 }
 
+/** Clear the cold boot safety flag to allow persistence */
+function clearColdBootFlag(): void {
+  if (_coldBootFlagPath && fs.existsSync(_coldBootFlagPath)) {
+    try {
+      fs.unlinkSync(_coldBootFlagPath);
+      log.info('[SelfUpgrade] Cold Boot flag cleared. State will now persist through restarts.');
+    } catch { /* ignore */ }
+  }
+}
+
 /** Stop any active batch implementation by clearing the DB flag */
 export function stopBatchImplementation(): boolean {
   try {
@@ -3848,6 +3873,7 @@ export async function updateUpgradeConfig(config: { intervalMs?: number, idleThr
     DRY_RUN = !config.autoFix;
     setSetting('upgrade_auto_fix', config.autoFix ? 'true' : 'false');
     log.info(`Auto-Fix mode updated to ${config.autoFix}`);
+    if (config.autoFix) clearColdBootFlag();
   }
 
   // Restart loop to apply new interval
@@ -3933,9 +3959,10 @@ export async function toggleContinuousScan(rootDir: string): Promise<boolean> {
     return false;
   }
 
-  // Set Paused = true so that Auto-Upgrade yields natively in Dashboard UI
   _paused = true;
   setSetting('upgrade_continuous_scan', 'true');
+  
+  clearColdBootFlag();
   
   log.info('Continuous scan mode requested');
   executeContinuousStart(rootDir);

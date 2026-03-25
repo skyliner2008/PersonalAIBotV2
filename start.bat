@@ -170,6 +170,7 @@ if /I "!START_MODE!"=="compact" (
 
 cd ../server
 echo [4/4] Starting server...
+echo 1 > COLD_BOOT.flag
 echo.
 echo +------------------------------------------------------+
 echo ^| Open in browser: http://localhost:3000              ^|
