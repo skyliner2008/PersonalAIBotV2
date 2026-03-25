@@ -13,7 +13,8 @@
 | **Second Brain (Codebase Map)** | 60% | Dependency graph + embeddings | ไม่มี call graph, stale embeddings |
 | **Test Generator** | 50% | Vitest integration | ไม่ตรวจ assertion quality, vacuous tests ผ่านได้ |
 | **Learning Journal** | 65% | Semantic search + confidence | ไม่มี temporal decay, async race conditions |
-| **Self-Healing** | 55% | Auto model downgrade | ไม่หา root cause, thresholds แข็งตัว |
+| **Dashboard UI** | 75% | Success/Failure metrics, realtime toggle | ใช้ Modal confirmations (ช้าลงเล็กน้อย), ไม่มี Global Delete |
+| **Self-Healing** | 60% | Auto model downgrade | ไม่หา root cause, thresholds แข็งตัว |
 | **Self-Reflection** | 60% | Periodic auto-analysis | Shallow pattern matching, ไม่ action ผลลัพธ์ |
 | **Impact Analysis** | 55% | Multi-hop BFS dependency walk | Regex-based export extraction, ไม่มี dataflow |
 | **Vector Store** | 60% | Cosine similarity, file-based | In-memory brute-force, ไม่ scale |
@@ -62,16 +63,16 @@
 - ใช้ AST tools (ast_replace_function, ast_add_import) สำหรับ cross-file edits
 ```
 
-### 1.4 ไม่มี Rollback อัตโนมัติเมื่อ TSC/Boot fail
+### 1.4 ไม่มี Rollback อัตโนมัติเมื่อ TSC/Boot fail (Re-analyzing v2.2)
 
-**ปัจจุบัน:** เมื่อ implementation fail → reject proposal → ไฟล์อาจค้างในสถานะเสีย
-**ปัญหา:** ถ้า AI แก้ไฟล์แล้ว TSC fail → ไฟล์ยังเป็น version ที่พัง
+**ปัจจุบัน:** ระบบคืนค่าสถานะเดิมบน Boot (Conditional Restoration) แต่ไม่มีการ Force Reset `implementing` อัตโนมัติแบบ Strict
+**ปัญหา:** หากเซิร์ฟเวอร์ค้างระหว่างเขียนไฟล์ และ Boot ใหม่โดยไม่ได้ล้างสถานะ งานอาจค้าง (Stuck) ได้
 
 **แนวทางแก้ไข:**
 ```
-- ก่อน implement: git stash หรือ backup ทุกไฟล์ที่จะแก้
-- เมื่อ verify fail: restore จาก backup อัตโนมัติ
-- เพิ่ม: ถ้า rollback สำเร็จ → ส่ง error กลับ AI ให้ลองอีกครั้ง (retry with error context)
+- เพิ่มระบบกู้คืนสถานะที่มีความละมุนขึ้น: Check timestamp ของ 'implementing'
+- ถ้าค้างเกิน 15 นาที → Auto-reset เป็น 'approved'
+- รักษา Modal confirmation ตามความชอบของผู้ใช้ แต่เพิ่ม "Don't show this again" checkbox
 ```
 
 ---
@@ -311,6 +312,7 @@ decay_factor = exp(-days_since_last_apply / 30)  // half-life 30 days
 | **Iterative self-correction** | ✅ (retry with error) | ❌ | Medium |
 | **Test-driven implementation** | ✅ (write test first) | ❌ (test after) | Medium |
 | **Context-aware chunking** | ✅ | ❌ | Medium |
+| **Success/Failure Metrics** | ✅ | ✅ (v2.2 Added) | Done |
 | **Structured output (tool_use)** | ✅ | ❌ (regex JSON parse) | Low |
 | **Memory management** | ✅ (token budgets) | Partial (16K budget) | Low |
 | **Negative examples in prompts** | ✅ | ❌ | Low |
@@ -318,4 +320,4 @@ decay_factor = exp(-days_since_last_apply / 30)  // half-life 30 days
 
 ---
 
-*Generated: 2026-03-24*
+*Generated: 2026-03-25* (Updated after User Manual Refinement v2.2)
