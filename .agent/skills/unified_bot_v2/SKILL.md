@@ -1027,3 +1027,18 @@ Outcome:
 
 Outcome:
 - Reduced the Auto-Implement rejection rate by providing the AI with accurate internal project context, stable file interaction, and robust automated validation tools.
+
+### 18.17 Dashboard UI Orchestration & Bulk Refinements (v2.2 - v2.3) (2026-03-25)
+
+- **High-Velocity Bulk Actions**:
+  - Optimized the Dashboard by removing redundant `confirm()` and `alert()` popups for **Approve All**, **Implement All**, **Retry**, and **Clear Rejected** actions.
+  - Reduced user-interruption during large batch processing, allowing AI-driven upgrades to proceed with zero-click continuity.
+- **Enhanced Metrics & Controls**:
+  - Implemented a dual-color **Success/Failure Status Bar** (Emerald/Rose) in the Dashboard that calculates real-time efficiency based on `implemented` vs `rejected` proposals.
+  - Added a global **"Delete All" (ลบทั้งหมด)** function with a mandatory English/Thai safety confirmation to clear the entire upgrade queue in one step.
+- **Process Robustness**:
+  - Refined the **Loop Orchestration** logic to accurately distinguish between "Idle Loop" (delayed scanning) and "Continuous Loop" (immediate rotation) base on user preferences.
+  - Fixed API synchronization issues for `deleteAllRejectedProposals` and added a new endpoint for global proposal purging.
+
+Outcome:
+- Drastically improved the user experience for high-volume codebase upgrades by streamlining the interaction model while maintaining strict safety locks for destructive actions.

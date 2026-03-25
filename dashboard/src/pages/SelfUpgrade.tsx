@@ -154,7 +154,7 @@ export default function SelfUpgrade() {
   const implementAllApproved = async () => {
     const approvedCount = proposals.filter(p => p.status === 'approved').length;
     if (approvedCount === 0) return;
-    // removed confirm for high-velocity v2.1 logic
+    
     try {
       await api.implementAllApprovedProposals();
       await fetchData();
@@ -166,7 +166,7 @@ export default function SelfUpgrade() {
   const approveAllPending = async () => {
     const pendingCount = proposals.filter(p => p.status === 'pending').length;
     if (pendingCount === 0) return;
-    // removed confirm for high-velocity v2.1 logic
+    
     try {
       await api.approveAllPendingProposals();
       await fetchData();
@@ -176,7 +176,6 @@ export default function SelfUpgrade() {
   };
 
   const stopBatch = async () => {
-    // removed confirm for high-velocity v2.1 logic
     try {
       await api.stopBatchImplementation();
       await fetchData();
@@ -188,7 +187,7 @@ export default function SelfUpgrade() {
   const retryAllRejected = async () => {
     const rejectedCount = proposals.filter(p => p.status === 'rejected').length;
     if (rejectedCount === 0) return;
-    // removed confirm/alert for high-velocity v2.1 logic
+    
     try {
       await api.retryAllRejectedProposals();
       await fetchData();
@@ -200,7 +199,7 @@ export default function SelfUpgrade() {
   const deleteAllRejected = async () => {
     const rejectedCount = proposals.filter(p => p.status === 'rejected').length;
     if (rejectedCount === 0) return;
-    // removed confirm for high-velocity v2.1 logic
+    
     try {
       await api.deleteAllRejectedProposals();
       await fetchData();
@@ -210,8 +209,6 @@ export default function SelfUpgrade() {
   };
 
   const deleteProposal = async (id: number) => {
-    if (!confirm('ลบ proposal นี้?')) return;
-    
     // Optimistic UI update
     setProposals(prev => prev.filter(p => p.id !== id));
     try {
@@ -219,6 +216,17 @@ export default function SelfUpgrade() {
     } catch (err) {
       console.error('Failed to delete proposal:', err);
       fetchData(); // Rollback on failure
+    }
+  };
+
+  const deleteAllProposals = async () => {
+    if (!confirm('⚠️ ยืนยันการลบรายการทั้งหมด (ทุกสถานะ) อย่างถาวร? การกระทำนี้ไม่สามารถย้อนกลับได้')) return;
+    
+    try {
+      await api.deleteAllUpgradeProposals();
+      await fetchData();
+    } catch (err) {
+      console.error('Failed to delete all proposals:', err);
     }
   };
 
@@ -270,16 +278,6 @@ export default function SelfUpgrade() {
       setDiffData({ before: `Error loading backup logs. They might not exist.\n\n${e.message}`, after: '' });
     } finally {
       setDiffLoading(false);
-    }
-  };
-
-  const deleteAllProposals = async () => {
-    if (!confirm('⚠️ ยืนยันการลบข้อมูลทั้งหมดในคิว? (Pending, Approved, Rejected, Implemented จะถูกลบถาวร)')) return;
-    try {
-      await api.deleteAllUpgradeProposals();
-      await fetchData();
-    } catch (err) {
-      console.error('Failed to delete all proposals:', err);
     }
   };
 
@@ -571,14 +569,16 @@ export default function SelfUpgrade() {
                   </button>
                 </>
               )}
-              <button
-                onClick={deleteAllProposals}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/20 text-xs font-bold rounded-lg transition-all"
-                title="ลบรายการทั้งหมด (ทุกสถานะ)"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                ลบทั้งหมด
-              </button>
+              {proposals.length > 0 && (
+                <button
+                  onClick={deleteAllProposals}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold rounded-lg shadow-lg shadow-rose-500/20 transition-all duration-300 hover:scale-105 active:scale-95"
+                  title="ลบรายการทั้งหมด (ทุกสถานะ)"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  ลบทั้งหมด
+                </button>
+              )}
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
@@ -720,6 +720,28 @@ export default function SelfUpgrade() {
             
             {stats && (
               <div className="space-y-3">
+                
+                {/* อัตราความสำเร็จ และ ความผิดพลาด (Success / Failure Metrics) */}
+                {(() => {
+                  const resolvedTotal = stats.implemented + stats.rejected + (stats.skipped || 0);
+                  const successRate = resolvedTotal > 0 ? Math.round(((stats.implemented + (stats.skipped || 0)) / resolvedTotal) * 100) : 0;
+                  const rejectRate = resolvedTotal > 0 ? Math.round((stats.rejected / resolvedTotal) * 100) : 0;
+                  
+                  return (
+                    <div className="bg-white/5 rounded-lg p-3 border border-white/5 space-y-2">
+                      <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider">
+                        <span className="text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> สำเร็จ {successRate}%</span>
+                        <span className="text-rose-400 flex items-center gap-1.5">{rejectRate}% ผิดพลาด <AlertTriangle className="w-3.5 h-3.5" /></span>
+                      </div>
+                      <div className="w-full bg-rose-500/20 rounded-full h-2 overflow-hidden flex">
+                        <div className="bg-emerald-500 h-full rounded-r-none transition-all duration-1000 shadow-[0_0_8px_rgba(16,185,129,0.5)]" style={{ width: `${successRate}%` }}></div>
+                        <div className="bg-rose-500 h-full rounded-l-none transition-all duration-1000" style={{ width: `${rejectRate}%` }}></div>
+                      </div>
+                      <p className="text-[9px] text-gray-500 text-center uppercase tracking-widest mt-1">ประมวลผลแล้ว {resolvedTotal} จากทั้งหมด {stats.total} รายการ</p>
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-2 gap-2">
                   <StatBox label="รอดำเนินการ" value={stats.pending} color="text-indigo-400" />
                   <StatBox label="อนุมัติแล้ว" value={stats.approved} color="text-emerald-400" />

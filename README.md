@@ -7,6 +7,7 @@
     - **Evolution Engine Updated**: ปรับปรุงระบบ Self-Upgrade ให้จดจำเครื่องมือสำคัญ (AST Tools) เสมอ ป้องกันการลบเครื่องมือที่จำเป็นในการซ่อมแซมตัวเอง 🧠🛠️
     - **Swarm Race Condition Fix**: นำระบบ Micro-queueing มาใช้ใน `SwarmHealthTracker` เพื่อป้องกันข้อมูลสถานะผิดพลาดเมื่อมีการบันทึกสถานะ Specialist พร้อมกันหลายรายการ 🛡️⚡
     - **Self-Upgrade Comprehensive Fix**: ยกระดับระบบ Self-Upgrade ด้วย Import Map Context, File-Level Locking, Atomic Writes, Structured TSC Parsing, Smoke Tests และระบบตีกลับ (Anti-Pattern Learning) เพื่อลดอัตราการแก้ไขโค้ดผิดพลาด 🚀🤖
+    - **Dashboard v2.3 Refined**: ลดความวุ่นวายของ UI โดยการนำกล่องข้อความแจ้งเตือน (Modal Popups) ออกจากการทำงานแบบชุด (Approve/Implement/Retry/Clear) เพื่อเพิ่มความคล่องตัวในการจัดการ พร้อมปุ่ม "ลบทั้งหมด" (Delete All) ที่มาพร้อมระบบล็อคความปลอดภัยหนึ่งเดียว ⚡🛡️
   </p>
 
   <p>
@@ -593,5 +594,5 @@ PersonalAIBotV2/
 <div align="center">
   <i>"I am Jarvis. What are we building today, sir?"</i>
   <br/><br/>
-  <sub>Built with ❤️ — PersonalAIBotV2 v2.1 | Last updated: 25 March 2026</sub>
+  <sub>Built with ❤️ — PersonalAIBotV2 v2.3 | Last updated: 25 March 2026</sub>
 </div>

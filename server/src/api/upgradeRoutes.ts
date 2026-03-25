@@ -10,6 +10,7 @@ import {
   deleteProposal,
   retryAllRejectedProposals,
   deleteAllRejectedProposals,
+  deleteAllProposals,
   getUpgradeStatus,
   toggleContinuousScan,
   notifyUserActivity,
@@ -95,6 +96,12 @@ router.post('/proposals/retry-rejected', asyncHandler(async (_req, res) => {
 router.delete('/proposals/rejected', asyncHandler(async (_req, res) => {
   const count = deleteAllRejectedProposals();
   res.json({ ok: true, count, message: `${count} rejected proposals deleted.` });
+}));
+
+// DELETE /api/upgrade/proposals — ลบ proposals ทั้งหมด ทุกสถานะ
+router.delete('/proposals', asyncHandler(async (_req, res) => {
+  const count = deleteAllProposals();
+  res.json({ ok: true, count, message: `All ${count} proposals deleted.` });
 }));
 
 // GET /api/upgrade/proposals/:id/diff — Get before/after code diff for implemented proposals
@@ -302,32 +309,5 @@ router.post('/activity', (_req, res) => {
   notifyUserActivity();
   res.json({ ok: true });
 });
-
-// DELETE /api/upgrade/proposals — ลบรายการทั้งหมดทิ้ง (Pending, Approved, Rejected, Implemented)
-router.delete('/proposals', asyncHandler(async (_req, res) => {
-  const { getDb } = await import('../database/db.js');
-  const db = getDb();
-  const info = db.prepare(`DELETE FROM upgrade_proposals`).run();
-  log.info(`[upgradeRoutes] Deleted ALL ${info.changes} proposals from the system.`);
-  res.json({ ok: true, count: info.changes });
-}));
-
-// DELETE /api/upgrade/proposals/rejected — ลบรายการที่ถูกปฏิเสธทิ้งทั้งหมด
-router.delete('/proposals/rejected', asyncHandler(async (_req, res) => {
-  const { getDb } = await import('../database/db.js');
-  const db = getDb();
-  const info = db.prepare(`DELETE FROM upgrade_proposals WHERE status = 'rejected'`).run();
-  log.info(`[upgradeRoutes] Deleted ${info.changes} rejected proposals.`);
-  res.json({ ok: true, count: info.changes });
-}));
-
-// POST /api/upgrade/proposals/retry-rejected — นำรายการที่ถูกปฏิเสธให้กลับไปรอพิจารณาใหม่
-router.post('/proposals/retry-rejected', asyncHandler(async (_req, res) => {
-  const { getDb } = await import('../database/db.js');
-  const db = getDb();
-  const info = db.prepare(`UPDATE upgrade_proposals SET status = 'pending' WHERE status = 'rejected'`).run();
-  log.info(`[upgradeRoutes] Retried ${info.changes} rejected proposals (set to pending).`);
-  res.json({ ok: true, count: info.changes });
-}));
 
 export default router;

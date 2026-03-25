@@ -746,6 +746,16 @@ export function deleteAllRejectedProposals(): number {
   }
 }
 
+export function deleteAllProposals(): number {
+  try {
+    const result = getDb().prepare('DELETE FROM upgrade_proposals').run();
+    return (result as any).changes || 0;
+  } catch (err: any) {
+    log.error(`Failed to delete all proposals: ${err.message}`);
+    return 0;
+  }
+}
+
 function logScan(filePath: string, findingsCount: number): void {
   try {
     getDb().prepare(
@@ -3645,24 +3655,6 @@ export async function startSelfUpgrade(rootDir: string): Promise<void> {
     return;
   }
 
-  const dbModule = await import('../database/db.js');
-  const db = dbModule.getDb();
-  
-  // 0.4 RECOVERY: Reset any proposals stuck in 'implementing' from a previous crash/restart
-  db.prepare(`UPDATE upgrade_proposals SET status = 'approved' WHERE status = 'implementing'`).run();
-
-  // 0.5 Detect Persistent Batch State before locking
-  const wasBatchActive = dbModule.getSetting('upgrade_implement_all') === 'true';
-
-  // 0.6 HARD RULE: Force OFF Continuous Scan and Auto-Upgrade on boot.
-  // Lock the database state synchronously to enforce the hard boot constraint.
-  dbModule.setSetting('upgrade_paused', 'true');
-  dbModule.setSetting('upgrade_continuous_scan', 'false');
-  
-  if (!wasBatchActive) {
-    dbModule.setSetting('upgrade_implement_all', 'false');
-  }
-
   ensureUpgradeTable();
   _currentRootDir = rootDir;
 
@@ -3720,9 +3712,10 @@ export async function startSelfUpgrade(rootDir: string): Promise<void> {
         executeContinuousStart(rootDir);
       }
 
-      // 2. Resume Batch Implementation
-      if (wasBatchActive) {
-        log.info('[SelfUpgrade] Detecting active batch implementation. Resuming process in 3s...');
+      // 2. Resume Batch Implementation (Queue Zero)
+      const isBatching = getSetting('upgrade_implement_all');
+      if (isBatching === 'true') {
+        // Delay slightly to allow server to fully boot and recovery logic (ensureUpgradeTable) to finish transactions
         setTimeout(() => {
           resumeBatchImplementation(rootDir).catch(e => {
             log.error('[SelfUpgrade] Failed to resume batch implementation', { error: e.message });
