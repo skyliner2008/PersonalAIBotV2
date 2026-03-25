@@ -15,6 +15,8 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('FileProcessor');
 
+const MAX_BINARY_FILE_SIZE_KB = 100 * 1024; // 100 MB limit
+
 export interface ProcessedFile {
   type: 'text' | 'image' | 'audio' | 'data';
   content: string;

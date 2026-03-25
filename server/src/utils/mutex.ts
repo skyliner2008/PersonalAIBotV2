@@ -15,7 +15,7 @@ export class KeyedMutex {
   async acquire(key: string): Promise<() => void> {
     // Wait for existing lock to release
     while (this.locks.has(key)) {
-      await this.locks.get(key); // test-replace-18
+      await this.locks.get(key); // test-replace-18-fixed
     }
 
     // Create new lock

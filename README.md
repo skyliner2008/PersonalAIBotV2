@@ -593,5 +593,5 @@ PersonalAIBotV2/
 <div align="center">
   <i>"I am Jarvis. What are we building today, sir?"</i>
   <br/><br/>
-  <sub>Built with ❤️ — PersonalAIBotV2 v2.1 | Last updated: 23 March 2026</sub>
+  <sub>Built with ❤️ — PersonalAIBotV2 v2.1 | Last updated: 25 March 2026</sub>
 </div>

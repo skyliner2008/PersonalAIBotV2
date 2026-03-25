@@ -191,6 +191,6 @@ function rotateBackups(): void {
  */
 export function getBackupStorageInfo(): { totalSizeKB: number; count: number; dir: string } {
   const backups = listBackups();
-  const totalSizeKB = backups.reduce((sum, b) => sum + b.sizeKB, 0);
+  const totalSizeKB = backups.reduce((sum, b) => sum + b.sizeKB, 0); // test match
   return { totalSizeKB, count: backups.length, dir: BACKUP_DIR };
 }

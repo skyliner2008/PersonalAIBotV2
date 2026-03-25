@@ -84,6 +84,7 @@ export class PersistentQueue<T = any> {
   private handler: ((payload: T) => Promise<void>) | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
   private pollMs: number;
+  private log: ReturnType<typeof createLogger>;
 
   constructor(
     queueName: string,
@@ -118,7 +119,7 @@ export class PersistentQueue<T = any> {
     dbRun(
       `INSERT INTO persistent_queue (queue_name, payload, max_retries, process_after)
        VALUES (?, ?, ?, ?)`,
-      [this.queueName, JSON.stringify(payload), maxR, processAfter]
+      [this.queueName, serializedPayload, maxR, processAfter]
     );
 
     // Get the last inserted ID

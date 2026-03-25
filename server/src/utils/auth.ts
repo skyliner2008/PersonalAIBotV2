@@ -23,7 +23,7 @@ const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * Dynamic getter for JWT secret - prioritizes Database over Environment
  */
 function getJwtSecret(): string {
-  let dbSecret: string | undefined;
+  let dbSecret: string | null | undefined;
   try {
     dbSecret = getCredential('JWT_SECRET') ?? undefined;
   } catch (e) {

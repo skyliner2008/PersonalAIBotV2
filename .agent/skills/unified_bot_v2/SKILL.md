@@ -168,6 +168,12 @@ Token estimation: `Math.ceil(text.length / 2.5)` (Thai/English mix)
 | Vector Store | `memory/vectorStore.ts` | HNSW index for fast semantic search, rebuild from SQLite |
 | Embedding Provider | `memory/embeddingProvider.ts` | Gemini embedding with model-chain fallback, caching + batching |
 | GraphRAG | `memory/graphMemory.ts` | Knowledge graph (nodes + edges) in SQLite |
+### 18.15 Self-Upgrade Hardening & UI Orchestration (v2.1)
+- **Boot Safety (Strict Paused)**: บังคับสถานะ `_paused = true` และ `upgrade_paused = 'true'` ทันทีที่เซิร์ฟเวอร์ Boot เพื่อป้องกัน Race Condition และการ Upgrade ซ้ำซ้อนโดยไม่ตั้งใจ
+- **Batch Persistence & Resumption**: ระบบจะจำว่ามีการรัน "Implement All" ค้างไว้หรือไม่ (ผ่าน `upgrade_implement_all` ใน DB) หากค้างอยู่จะ Auto-Resume ชุดงานเดิมทันทีหลัง Restart โดยที่ Scanner ยังคงหยุดพักเพื่อความปลอดภัย
+- **Proposition State Recovery**: ระบบจะกู้คืนข้อเสนอที่ค้างอยู่ในสถานะ `implementing` (ซึ่งมักเกิดจากเซิร์ฟเวอร์โดนรีสตาร์ทกลางคัน) ให้กลับเป็น `approved` โดยอัตโนมัติ เพื่อให้กระบวนการ Batch ทำงานต่อได้จนครบ
+- **No-Modal Workflow**: ถอดระบบ `confirm()` และ `alert()` ออกจากการดำเนินการแบบชุด (Approve, Implement, Retry, Clear) ทั้งหมดเพื่อให้ Dashboard ทำงานได้รวดเร็วแบบ High-Velocity (ยกเว้นปุ่ม "ลบทั้งหมด" ที่เปลี่ยนเป็น Global Delete และยังคงมีระบบยืนยันความปลอดภัย)
+- **Manual Control Precision**: แยกปุ่ม "อนุมัติทั้งหมด" และ "ดำเนินการทั้งหมด" ออกจากกันอย่างอิสระเพื่อให้ User เป็นผู้อนุมัติชุดงานก่อน แล้วค่อยสั่งดำเนินการวนลูปจนจบได้ด้วยการกดเพียงครั้งเดียว
 | Conversation Summarizer | `memory/conversationSummarizer.ts` | Rolling summaries with provider-backed LLM |
 | Plan Tracker | `memory/planTracker.ts` | Stateful plan management (create/update/close) |
 | Goal Tracker | `memory/goalTracker.ts` | Active goal tracking per user |

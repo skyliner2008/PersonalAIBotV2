@@ -22,6 +22,7 @@ import { buildJarvisDelegationPlan, type JarvisPlannerOptions } from '../swarm/j
 import { buildRuntimeJarvisPlannerOptions } from '../swarm/jarvisRuntimePlanning.js';
 import { resolveJarvisSwarmRequest } from './jarvisSwarmIntent.js';
 import { getRootAdminIdentity } from '../system/rootAdmin.js';
+// Removed unused getCliInfo and CLI_ICONS imports
 
 const log = createLogger('MessagingBridge');
 const swarmCoordinator = getSwarmCoordinator();

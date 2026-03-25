@@ -303,4 +303,31 @@ router.post('/activity', (_req, res) => {
   res.json({ ok: true });
 });
 
+// DELETE /api/upgrade/proposals — ลบรายการทั้งหมดทิ้ง (Pending, Approved, Rejected, Implemented)
+router.delete('/proposals', asyncHandler(async (_req, res) => {
+  const { getDb } = await import('../database/db.js');
+  const db = getDb();
+  const info = db.prepare(`DELETE FROM upgrade_proposals`).run();
+  log.info(`[upgradeRoutes] Deleted ALL ${info.changes} proposals from the system.`);
+  res.json({ ok: true, count: info.changes });
+}));
+
+// DELETE /api/upgrade/proposals/rejected — ลบรายการที่ถูกปฏิเสธทิ้งทั้งหมด
+router.delete('/proposals/rejected', asyncHandler(async (_req, res) => {
+  const { getDb } = await import('../database/db.js');
+  const db = getDb();
+  const info = db.prepare(`DELETE FROM upgrade_proposals WHERE status = 'rejected'`).run();
+  log.info(`[upgradeRoutes] Deleted ${info.changes} rejected proposals.`);
+  res.json({ ok: true, count: info.changes });
+}));
+
+// POST /api/upgrade/proposals/retry-rejected — นำรายการที่ถูกปฏิเสธให้กลับไปรอพิจารณาใหม่
+router.post('/proposals/retry-rejected', asyncHandler(async (_req, res) => {
+  const { getDb } = await import('../database/db.js');
+  const db = getDb();
+  const info = db.prepare(`UPDATE upgrade_proposals SET status = 'pending' WHERE status = 'rejected'`).run();
+  log.info(`[upgradeRoutes] Retried ${info.changes} rejected proposals (set to pending).`);
+  res.json({ ok: true, count: info.changes });
+}));
+
 export default router;

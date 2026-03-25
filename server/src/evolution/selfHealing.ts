@@ -10,6 +10,39 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('SelfHealing');
 
+// Cooldown tracking to prevent fix-attempt loops
+const _fixCooldowns = new Map<string, number>(); // issue key → timestamp of last fix attempt
+const FIX_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between fix attempts for same issue
+
+function isOnCooldown(issueKey: string): boolean {
+    const lastAttempt = _fixCooldowns.get(issueKey);
+    if (!lastAttempt) return false;
+    return Date.now() - lastAttempt < FIX_COOLDOWN_MS;
+}
+
+function markFixAttempted(issueKey: string): void {
+    _fixCooldowns.set(issueKey, Date.now());
+    // Clean old entries
+    for (const [key, ts] of _fixCooldowns) {
+        if (Date.now() - ts > FIX_COOLDOWN_MS * 3) _fixCooldowns.delete(key);
+    }
+}
+
+/**
+ * Categorize an error string into an actionable root cause
+ */
+function categorizeError(errorMsg: string): string {
+    const msg = errorMsg.toLowerCase();
+    if (/429|rate.limit|quota|resource.exhausted/i.test(msg)) return 'api_quota';
+    if (/timeout|timed.out|econnreset|socket.hang/i.test(msg)) return 'timeout';
+    if (/401|403|unauthorized|forbidden|invalid.*key/i.test(msg)) return 'auth';
+    if (/500|502|503|504|internal.server/i.test(msg)) return 'server_error';
+    if (/enotfound|dns|network|econnrefused/i.test(msg)) return 'network';
+    if (/out.of.memory|heap|allocation/i.test(msg)) return 'memory';
+    if (/json|parse|syntax/i.test(msg)) return 'parse_error';
+    return 'unknown';
+}
+
 export interface Issue {
     type: 'high_error_rate' | 'tool_failing' | 'slow_model' | 'memory_leak';
     severity: 'low' | 'medium' | 'high';
@@ -25,15 +58,34 @@ export function detectIssues(): Issue[] {
     const runs = getAgentRunHistory().slice(0, 30);
     if (runs.length < 5) return issues;
 
-    // 1. High error rate
+    // 1. High error rate (adaptive threshold based on recent trend)
     const errorRuns = runs.filter((r: AgentRun) => r.error);
     const errorRate = errorRuns.length / runs.length;
-    if (errorRate > 0.3) {
+    const recentErrors = runs.slice(0, 10).filter((r: AgentRun) => r.error);
+    const olderErrors = runs.slice(10).filter((r: AgentRun) => r.error);
+    const recentErrorRate = runs.length >= 10 ? recentErrors.length / 10 : errorRate;
+    const olderErrorRate = olderErrors.length > 0 ? olderErrors.length / Math.max(runs.length - 10, 1) : 0;
+
+    // Adaptive: alert if recent rate is significantly worse than older rate
+    const isRegressing = recentErrorRate > olderErrorRate * 1.5 + 0.1;
+
+    if (errorRate > 0.3 || isRegressing) {
+        // Root cause analysis: group errors by type
+        const errorTypes: Record<string, number> = {};
+        for (const r of errorRuns) {
+            const errType = categorizeError(r.error || '');
+            errorTypes[errType] = (errorTypes[errType] || 0) + 1;
+        }
+        const topError = Object.entries(errorTypes).sort((a, b) => b[1] - a[1])[0];
+
         issues.push({
             type: 'high_error_rate',
             severity: errorRate > 0.5 ? 'high' : 'medium',
-            description: `Error rate: ${(errorRate * 100).toFixed(0)}% (${errorRuns.length}/${runs.length})`,
-            suggestedFix: 'Switch to more stable model or check API key',
+            description: `Error rate: ${(errorRate * 100).toFixed(0)}% (${errorRuns.length}/${runs.length})${isRegressing ? ' [REGRESSING]' : ''}. Top cause: ${topError?.[0] || 'unknown'} (${topError?.[1] || 0}x)`,
+            suggestedFix: topError?.[0] === 'api_quota' ? 'Switch to cheaper model or add rate limiting'
+                : topError?.[0] === 'timeout' ? 'Reduce model complexity or increase timeout'
+                : topError?.[0] === 'auth' ? 'Check API key validity'
+                : 'Switch to more stable model or check API key',
         });
     }
 
@@ -94,6 +146,25 @@ export function detectIssues(): Issue[] {
         });
     }
 
+    // 5. Stale model detection: if a specific model is failing more than others
+    const modelFails: Record<string, { total: number; fails: number }> = {};
+    for (const run of runs) {
+        const model = (run as any).model || 'unknown';
+        if (!modelFails[model]) modelFails[model] = { total: 0, fails: 0 };
+        modelFails[model].total++;
+        if (run.error) modelFails[model].fails++;
+    }
+    for (const [model, stats] of Object.entries(modelFails)) {
+        if (stats.total >= 5 && stats.fails / stats.total > 0.6) {
+            issues.push({
+                type: 'high_error_rate',
+                severity: 'high',
+                description: `Model "${model}" failing ${stats.fails}/${stats.total} times (${Math.round(stats.fails/stats.total*100)}%)`,
+                suggestedFix: `Consider switching from "${model}" to a more reliable alternative`,
+            });
+        }
+    }
+
     return issues;
 }
 
@@ -105,6 +176,13 @@ export function attemptFixes(issues: Issue[]): { fixed: number; skipped: number 
     let skipped = 0;
 
     for (const issue of issues) {
+        const issueKey = `${issue.type}:${issue.description.substring(0, 50)}`;
+        if (isOnCooldown(issueKey)) {
+            log.debug(`Skipping fix for ${issue.type} — still on cooldown`);
+            skipped++;
+            continue;
+        }
+
         try {
             switch (issue.type) {
                 case 'slow_model': {
@@ -135,6 +213,7 @@ export function attemptFixes(issues: Issue[]): { fixed: number; skipped: number 
                                 configManager.updateConfig({ autoRouting: currentConfig.autoRouting, routes: newRoutes });
                                 logEvolution('self_heal', `Auto-switched "${taskType}" model from ${active.modelName} → ${fasterModel} due to slow performance`, { issue });
                                 addLearning('performance', `Switched ${taskType} to faster model due to avg ${issue.description}`, 'self_healing', 0.7);
+                                markFixAttempted(issueKey);
                                 fixed++;
                                 continue;
                             }
@@ -149,6 +228,7 @@ export function attemptFixes(issues: Issue[]): { fixed: number; skipped: number 
                     if (global.gc) {
                         global.gc();
                         logEvolution('self_heal', 'Triggered garbage collection due to high memory usage', { issue });
+                        markFixAttempted(issueKey);
                         fixed++;
                     } else {
                         skipped++;

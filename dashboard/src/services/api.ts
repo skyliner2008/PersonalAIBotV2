@@ -544,6 +544,8 @@ export const api = {
     request('/upgrade/proposals/retry-rejected', { method: 'POST' }),
   deleteAllRejectedProposals: () =>
     request('/upgrade/proposals/rejected', { method: 'DELETE' }),
+  deleteAllUpgradeProposals: () =>
+    request('/upgrade/proposals', { method: 'DELETE' }),
   triggerUpgradeScan: () =>
     request('/upgrade/scan', { method: 'POST' }),
   updateUpgradeConfig: (config: { intervalMs?: number, idleThresholdMs?: number, autoFix?: boolean }) =>

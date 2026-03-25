@@ -154,70 +154,58 @@ export default function SelfUpgrade() {
   const implementAllApproved = async () => {
     const approvedCount = proposals.filter(p => p.status === 'approved').length;
     if (approvedCount === 0) return;
-    if (!confirm(`ยืนยันการดำเนินการทั้งหมด (${approvedCount} รายการ)? ระบบจะค่อยๆ ทยอยแก้ไขทีละไฟล์และอาจมีการรีสตาร์ทเซิร์ฟเวอร์เป็นระยะ`)) return;
-    
+    // removed confirm for high-velocity v2.1 logic
     try {
       await api.implementAllApprovedProposals();
       await fetchData();
-      alert('เริ่มดำเนินการแบบชุดแล้ว กรุณารอสักครู่ (สถานะจะทยอยเปลี่ยนเป็น Implementing)');
     } catch (err) {
       console.error('Failed to implement all:', err);
-      alert('เกิดข้อผิดพลาดในการสั่งการแบบชุด');
     }
   };
 
   const approveAllPending = async () => {
     const pendingCount = proposals.filter(p => p.status === 'pending').length;
     if (pendingCount === 0) return;
-    if (!confirm(`ยืนยันการอนุมัติ proposals ที่รอดำเนินการทั้งหมด ${pendingCount} รายการ?`)) return;
-    
+    // removed confirm for high-velocity v2.1 logic
     try {
       await api.approveAllPendingProposals();
       await fetchData();
     } catch (err) {
       console.error('Failed to approve all:', err);
-      alert('เกิดข้อผิดพลาดในการอนุมัติทั้งหมด');
     }
   };
 
   const stopBatch = async () => {
-    if (!confirm('ยืนยันหยุดดำเนินการ? ระบบจะหยุดหลังจากทำ proposal ที่กำลังดำเนินการอยู่เสร็จ')) return;
-    
+    // removed confirm for high-velocity v2.1 logic
     try {
       await api.stopBatchImplementation();
       await fetchData();
     } catch (err) {
       console.error('Failed to stop batch:', err);
-      alert('เกิดข้อผิดพลาดในการหยุดดำเนินการ');
     }
   };
 
   const retryAllRejected = async () => {
     const rejectedCount = proposals.filter(p => p.status === 'rejected').length;
     if (rejectedCount === 0) return;
-    if (!confirm(`ยืนยันการนำรายการที่ถูกปฏิเสธ (Rejected) ทั้งหมด ${rejectedCount} รายการ กลับไปรอพิจารณาใหม่ (Pending)?`)) return;
-    
+    // removed confirm/alert for high-velocity v2.1 logic
     try {
       await api.retryAllRejectedProposals();
       await fetchData();
-      alert('นำรายการที่ถูกปฏิเสธกลับสู่สถานะ Pending เรียบร้อยแล้ว');
     } catch (err) {
       console.error('Failed to retry all rejected:', err);
-      alert('เกิดข้อผิดพลาด');
     }
   };
 
   const deleteAllRejected = async () => {
     const rejectedCount = proposals.filter(p => p.status === 'rejected').length;
     if (rejectedCount === 0) return;
-    if (!confirm(`ยืนยันการลบรายการที่ถูกปฏิเสธ (Rejected) ทิ้งทั้งหมด ${rejectedCount} รายการ อย่างถาวร?`)) return;
-    
+    // removed confirm for high-velocity v2.1 logic
     try {
       await api.deleteAllRejectedProposals();
       await fetchData();
     } catch (err) {
       console.error('Failed to delete all rejected:', err);
-      alert('เกิดข้อผิดพลาดในการลบ');
     }
   };
 
@@ -282,6 +270,16 @@ export default function SelfUpgrade() {
       setDiffData({ before: `Error loading backup logs. They might not exist.\n\n${e.message}`, after: '' });
     } finally {
       setDiffLoading(false);
+    }
+  };
+
+  const deleteAllProposals = async () => {
+    if (!confirm('⚠️ ยืนยันการลบข้อมูลทั้งหมดในคิว? (Pending, Approved, Rejected, Implemented จะถูกลบถาวร)')) return;
+    try {
+      await api.deleteAllUpgradeProposals();
+      await fetchData();
+    } catch (err) {
+      console.error('Failed to delete all proposals:', err);
     }
   };
 
@@ -573,6 +571,14 @@ export default function SelfUpgrade() {
                   </button>
                 </>
               )}
+              <button
+                onClick={deleteAllProposals}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/20 text-xs font-bold rounded-lg transition-all"
+                title="ลบรายการทั้งหมด (ทุกสถานะ)"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                ลบทั้งหมด
+              </button>
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
