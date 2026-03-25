@@ -8,6 +8,7 @@ description: "Complete architecture reference for PersonalAIBotV2 — Agentic AI
 - **Resilient Tool Selection**: ปรับปรุง `agent.ts` เพื่อจัดการกับ `JSON parsing failed` โดยเน้นการดักจับ JSON Array ของ String ที่แม่นยำขึ้น ป้องกัน SyntaxError จากข้อความรบกวนของ LLM
 - **Swarm Health Protection**: แก้ไข Race Condition ใน `SwarmHealthTracker` โดยใช้ระบบ Micro-queueing จัดการการอัปเดตสถานะแบบอะซิงโครนัส
 - **AST Protection**: ปรับปรุงให้ระบบ Self-Upgrade ปกป้องเครื่องมือกลุ่ม AST (ast_rename, find_references) เสมอ เพื่อรักษาความสามารถในการแก้ไขโค้ดที่ซับซ้อน
+- **Self-Upgrade Safety v2.4/v2.5**: เพิ่มระบบ Cold-Boot Guard (`COLD_BOOT.flag`) ป้องกันการทำงานอัตโนมัติเมื่อเปิดเครื่อง และปุ่ม Reset Token Usage สำหรับล้างสถิติการใช้งาน
 - **New API Providers**: รองรับโมเดลจาก Z.AI (glm-5) และ OpenCode.ai (kimi-k2.5) ใน `provider-registry.json`
 
 # PersonalAIBotV2 — Complete Architecture Reference
@@ -373,6 +374,8 @@ The Second Brain (`codebase_map` + `codebase_edges` + `codebase_embeddings`) giv
 - **Stuck Recovery**: On server boot, any proposals stuck in `implementing` are automatically recovered or rejected after 3+ retries
 - **Immortal Core Sandbox**: Critical system files are hard-protected from modification but their architecture IS mapped into Second Brain for context
 - **esbuild Syntax Check (stdin-piped)**: Uses temp script file + stdin pipe instead of command line to avoid OS ENAMETOOLONG errors on large files
+- **Cold-Boot Safety Guard (v2.4)**: Forced PAUSED state upon manual server startup via `COLD_BOOT.flag`. Prevents accidental token drain.
+- **Token Usage Reset (v2.5)**: Ability to clear all token/cost metrics from the database and UI to restart monitoring from zero.
 
 #### Boot Guardian Integration
 

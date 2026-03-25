@@ -1113,3 +1113,20 @@ export function trackUpgradeTokens(model: string, tokensIn: number, tokensOut: n
     console.debug('[DB] trackUpgradeTokens error:', String(e));
   }
 }
+
+/**
+ * Reset all Self-Upgrade usage statistics (tokens and cost).
+ */
+export function resetUpgradeStats(): void {
+  try {
+    const dbInstance = getDb();
+    dbInstance.transaction(() => {
+      setSetting('upgrade_tokens_in', '0');
+      setSetting('upgrade_tokens_out', '0');
+      setSetting('upgrade_cost_usd', '0');
+    })();
+    logger.info('[DB] Self-Upgrade usage stats reset to zero');
+  } catch (e) {
+    logger.error('[DB] Failed to reset upgrade stats:', String(e));
+  }
+}

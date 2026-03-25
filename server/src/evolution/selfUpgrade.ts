@@ -8,7 +8,7 @@
 // 4. เสนอแผนอัพเกรด (ช่วงทดสอบ: เสนอเท่านั้น ไม่ลงมือทำ)
 // 5. ใช้ dynamic model switching ตาม task
 
-import { getDb, addLog, trackUpgradeTokens, getSetting, setSetting, upsertCodebaseNode, searchCodebaseMapByDependencies } from '../database/db.js';
+import { getDb, addLog, trackUpgradeTokens, resetUpgradeStats, getSetting, setSetting, upsertCodebaseNode, searchCodebaseMapByDependencies } from '../database/db.js';
 import * as diff from 'diff';
 import { createLogger } from '../utils/logger.js';
 import { logEvolution, addLearning } from './learningJournal.js';
@@ -3818,6 +3818,11 @@ export function getUpgradeStatus(): {
     dryRun: DRY_RUN,
     isBatchActive: batchActive,
   };
+}
+
+/** Reset AI Token usage statistics */
+export function resetUpgradeUsage(): void {
+  resetUpgradeStats();
 }
 
 /** Approve all pending proposals in one go */

@@ -242,6 +242,16 @@ export default function SelfUpgrade() {
     }
   };
 
+  const resetUsage = async () => {
+    if (!confirm('ยืนยันการรีเซ็ตสถิติการใช้งาน AI Tokens ทั้งหมด?')) return;
+    try {
+      await api.resetUpgradeUsage();
+      await fetchData();
+    } catch (err) {
+      console.error('Failed to reset usage:', err);
+    }
+  };
+
   const approveDiffAction = async (id: number) => {
     try {
       await api.approveUpgradeDiff(id);
@@ -781,9 +791,18 @@ export default function SelfUpgrade() {
                 </div>
 
                 <div className="pt-3 border-t border-white/5">
-                  <label className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-2 block flex items-center gap-1">
-                    <Bot className="w-2.5 h-2.5 text-cyan-400" />
-                    การใช้ AI Tokens (Self-Upgrade)
+                  <label className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-2 block flex items-center justify-between gap-1">
+                    <span className="flex items-center gap-1">
+                      <Bot className="w-2.5 h-2.5 text-cyan-400" />
+                      การใช้ AI Tokens (Self-Upgrade)
+                    </span>
+                    <button 
+                      onClick={resetUsage}
+                      className="text-[8px] text-gray-500 hover:text-rose-400 flex items-center gap-0.5 transition-colors uppercase"
+                      title="รีเซ็ตค่าการใช้งานทั้งหมด"
+                    >
+                      <RefreshCcw className="w-2 h-2" /> Reset
+                    </button>
                   </label>
                   <div className="grid grid-cols-2 gap-2 mb-2">
                     <div className="bg-white/5 rounded-lg p-2 border border-white/5">

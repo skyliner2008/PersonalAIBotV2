@@ -582,6 +582,8 @@ export const api = {
     }),
   getUpgradeProposalLog: (id: number) =>
     request(`/upgrade/proposals/${id}/log`),
+  resetUpgradeUsage: () =>
+    request('/upgrade/reset-usage', { method: 'POST' }),
 
   // Cron Jobs (Agentic Automation)
   getCronJobs: () => request('/cron-jobs'),

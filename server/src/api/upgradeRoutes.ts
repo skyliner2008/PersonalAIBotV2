@@ -15,7 +15,8 @@ import {
   toggleContinuousScan,
   notifyUserActivity,
   approveDiff,
-  rejectDiff
+  rejectDiff,
+  resetUpgradeUsage
 } from '../evolution/selfUpgrade.js';
 import type { ProposalStatus, ProposalType } from '../evolution/selfUpgrade.js';
 import { asyncHandler } from '../utils/errorHandler.js';
@@ -102,6 +103,12 @@ router.delete('/proposals/rejected', asyncHandler(async (_req, res) => {
 router.delete('/proposals', asyncHandler(async (_req, res) => {
   const count = deleteAllProposals();
   res.json({ ok: true, count, message: `All ${count} proposals deleted.` });
+}));
+
+// POST /api/upgrade/reset-usage — รีเซ็ตค่าการใช้ AI Tokens
+router.post('/reset-usage', asyncHandler(async (_req, res) => {
+  resetUpgradeUsage();
+  res.json({ ok: true, message: 'AI Token usage statistics reset to zero.' });
 }));
 
 // GET /api/upgrade/proposals/:id/diff — Get before/after code diff for implemented proposals

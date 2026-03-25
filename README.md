@@ -8,6 +8,8 @@
     - **Swarm Race Condition Fix**: นำระบบ Micro-queueing มาใช้ใน `SwarmHealthTracker` เพื่อป้องกันข้อมูลสถานะผิดพลาดเมื่อมีการบันทึกสถานะ Specialist พร้อมกันหลายรายการ 🛡️⚡
     - **Self-Upgrade Comprehensive Fix**: ยกระดับระบบ Self-Upgrade ด้วย Import Map Context, File-Level Locking, Atomic Writes, Structured TSC Parsing, Smoke Tests และระบบตีกลับ (Anti-Pattern Learning) เพื่อลดอัตราการแก้ไขโค้ดผิดพลาด 🚀🤖
     - **Dashboard v2.3 Refined**: ลดความวุ่นวายของ UI โดยการนำกล่องข้อความแจ้งเตือน (Modal Popups) ออกจากการทำงานแบบชุด (Approve/Implement/Retry/Clear) เพื่อเพิ่มความคล่องตัวในการจัดการ พร้อมปุ่ม "ลบทั้งหมด" (Delete All) ที่มาพร้อมระบบล็อคความปลอดภัยหนึ่งเดียว ⚡🛡️
+    - **Self-Upgrade v2.4 Cold-Boot Guard**: เพิ่มระบบ `COLD_BOOT.flag` เพื่อบังคับสถานะ PAUSED เมื่อเปิด Server ครั้งแรก ป้องกันการกิน Token โดยไม่ตั้งใจ พร้อมระบบจดจำสถานะ Batch ให้ทำงานต่อได้หลังรีสตาร์ทอัตโนมัติ ❄️🛡️
+    - **Token Usage Reset v2.5**: เพิ่มปุ่ม Reset สถิติการใช้ AI Tokens ในหน้า Self-Upgrade เพื่อการติดตามงบประมาณที่แม่นยำและคล่องตัวยิ่งขึ้น 💎รีเซ็ต
   </p>
 
   <p>
@@ -594,5 +596,5 @@ PersonalAIBotV2/
 <div align="center">
   <i>"I am Jarvis. What are we building today, sir?"</i>
   <br/><br/>
-  <sub>Built with ❤️ — PersonalAIBotV2 v2.3 | Last updated: 25 March 2026</sub>
+  <sub>Built with ❤️ — PersonalAIBotV2 v2.5 | Last updated: 25 March 2026</sub>
 </div>
