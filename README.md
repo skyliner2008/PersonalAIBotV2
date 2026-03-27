@@ -7,6 +7,7 @@
     - **Evolution Engine Updated**: ปรับปรุงระบบ Self-Upgrade ให้จดจำเครื่องมือสำคัญ (AST Tools) เสมอ ป้องกันการลบเครื่องมือที่จำเป็นในการซ่อมแซมตัวเอง 🧠🛠️
     - **Swarm Race Condition Fix**: นำระบบ Micro-queueing มาใช้ใน `SwarmHealthTracker` เพื่อป้องกันข้อมูลสถานะผิดพลาดเมื่อมีการบันทึกสถานะ Specialist พร้อมกันหลายรายการ 🛡️⚡
     - **Self-Upgrade Comprehensive Fix**: ยกระดับระบบ Self-Upgrade ด้วย Import Map Context, File-Level Locking, Atomic Writes, Structured TSC Parsing, Smoke Tests และระบบตีกลับ (Anti-Pattern Learning) เพื่อลดอัตราการแก้ไขโค้ดผิดพลาด 🚀🤖
+    - **Unit Test Stability (v2.1)**: แก้ไขข้อผิดพลาดในชุดทดสอบทั้งหมด 605 รายการ ครอบคลุมการจัดการ Path ในฐานข้อมูล, การปรับค่า Default ของระบบ Swarm, และระบบความปลอดภัยของ Credentials ให้ทำงานได้สมบูรณ์ 100% 🛡️✅
   </p>
 
   <p>

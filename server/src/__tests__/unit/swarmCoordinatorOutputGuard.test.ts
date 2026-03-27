@@ -78,20 +78,24 @@ describe('SwarmCoordinator output guard', () => {
 
   it('flags local synthesis completeness when completed lane output is unusable', () => {
     const coordinator = new SwarmCoordinator() as any;
-    const summary = coordinator.buildLocalSynthesisForBatch({
-      objective: 'Test objective',
-      assignments: [
-        {
-          title: 'A1 - Evidence gathering',
-          specialist: 'gemini-cli-agent',
-          batchStage: 'analysis',
-          status: 'completed',
-          taskId: 't1',
-          taskType: 'web_search',
-          result: 'Attempt 1 failed with status 429. Retrying with backoff... GaxiosError: No capacity available for model',
-        },
-      ],
-    });
+    const summary = coordinator.batchManager.buildLocalSynthesisForBatch(
+      {
+        objective: 'Test objective',
+        assignments: [
+          {
+            title: 'A1 - Evidence gathering',
+            specialist: 'gemini-cli-agent',
+            batchStage: 'analysis',
+            status: 'completed',
+            taskId: 't1',
+            taskType: 'web_search',
+            result: 'Attempt 1 failed with status 429. Retrying with backoff... GaxiosError: No capacity available for model',
+          },
+        ],
+      },
+      (s: string) => s, // dummy sanitize
+      (s: string) => s.slice(0, 10), // dummy extract
+    );
 
     expect(summary).toContain('insufficient=1');
     expect(summary).toContain('Completeness: incomplete');

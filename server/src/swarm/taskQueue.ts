@@ -537,6 +537,14 @@ export class TaskQueue {
     }
 
     this.processingTasks.delete(taskId);
+    
+    // Adjust lifetime stats if we are requeueing a terminal task
+    if (task.status === 'completed') {
+      this.totalCompletedCount = Math.max(0, this.totalCompletedCount - 1);
+    } else if (task.status === 'failed') {
+      this.totalFailedCount = Math.max(0, this.totalFailedCount - 1);
+    }
+
     // Remove from history if requeued to avoid duplicate entries with old state
     this.recentHistory = this.recentHistory.filter(h => h.id !== taskId);
     

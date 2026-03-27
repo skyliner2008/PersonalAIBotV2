@@ -112,7 +112,7 @@ export class SwarmHealthTracker {
     this.specialistUpdateQueue.set(specialistName, queue);
 
     if (!this.specialistProcessing.has(specialistName)) {
-      process.nextTick(() => this.processQueue(specialistName));
+      this.processQueue(specialistName);
     }
   }
 
