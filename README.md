@@ -2,8 +2,10 @@
   <h1>🤖 PersonalAIBotV2</h1>
   <p><strong>Advanced Agentic AI Platform with Multi-Agent Swarm Orchestration, 4-Layer Memory, and Autonomous Self-Evolution</strong></p>
   <p>
+    - **Brain Visualizer v4.1 (Interaction Fix)**: แก้ไขปัญหาการคลิกเลือกโหนดที่ถูกบดบังด้วยเทคนิค `BackSide Raycast` พร้อมอัปเกรดระบบตัวเลือกปรับแต่งสีและโปร่งแสง (Visual Settings) และกู้คืนการแสดงผลโหนด `persistent_queue` และ `cron_jobs` ให้ครบถ้วน 🧠🖱️🛡️🚀
     - **Gemini 3 Unlock**: ปลดล็อกการเลือกใช้รุ่น `gemini-3-flash-preview` และ `gemini-3.1` อย่างถาวร โดยการแก้ปัญหา Alias Persistence และลบเงื่อนไขการดีดกลับ (Stale Model Map) เพื่อให้ใช้งานรุ่นพรีเมียมล่าสุดได้จริง 🔓🛰️
     - **DynamicRouter Resilience**: เพิ่มระบบป้องกัน SyntaxError ใน `agent.ts` โดยใช้ Regex แบบเจาะจงเฉพาะ Tool List และระบบ Multi-match retry เพื่อให้การประมวลผล JSON นิ่งและเสถียรที่สุด 🧩🚀
+    - **Unit Test Stability (v2.1)**: แก้ไขข้อผิดพลาดในชุดทดสอบทั้งหมด 605 รายการ ครอบคลุมการจัดการ Path ในฐานข้อมูล, การปรับค่า Default ของระบบ Swarm, และระบบความปลอดภัยของ Credentials ให้ทำงานได้สมบูรณ์ 100% 🛡️✅
     - **Evolution Engine Updated**: ปรับปรุงระบบ Self-Upgrade ให้จดจำเครื่องมือสำคัญ (AST Tools) เสมอ ป้องกันการลบเครื่องมือที่จำเป็นในการซ่อมแซมตัวเอง 🧠🛠️
     - **Swarm Race Condition Fix**: นำระบบ Micro-queueing มาใช้ใน `SwarmHealthTracker` เพื่อป้องกันข้อมูลสถานะผิดพลาดเมื่อมีการบันทึกสถานะ Specialist พร้อมกันหลายรายการ 🛡️⚡
     - **Self-Upgrade Comprehensive Fix**: ยกระดับระบบ Self-Upgrade ด้วย Import Map Context, File-Level Locking, Atomic Writes, Structured TSC Parsing, Smoke Tests และระบบตีกลับ (Anti-Pattern Learning) เพื่อลดอัตราการแก้ไขโค้ดผิดพลาด 🚀🤖

@@ -149,6 +149,14 @@ export function resolveProviderApiKey(providerId: string): ProviderApiKeyResolut
     return { key: managedKey, source: 'db' };
   }
 
+  const provider = getProvider(providerId);
+  if (provider?.apiKeyEnvVar) {
+    const envValue = process.env[provider.apiKeyEnvVar];
+    if (envValue) {
+      return { key: envValue, source: 'env', envVar: provider.apiKeyEnvVar };
+    }
+  }
+
   return { key: null, source: 'none' };
 }
 

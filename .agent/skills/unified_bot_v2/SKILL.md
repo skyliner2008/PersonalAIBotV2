@@ -3,6 +3,16 @@ name: "Unified Bot Architecture (v2)"
 description: "Complete architecture reference for PersonalAIBotV2 — Agentic AI Platform with multi-agent orchestration, 4-layer MemGPT memory, self-evolution engine, 40+ tools, and production hardening. Read this before any project work."
 ---
 
+### [Update 2026-03-29] Brain Visualizer Interaction & Infrastructure Nodes (v4.1) 🧠🖱️🛡️
+- **Hemisphere Interaction Fix (BackSide Raycast)**: แก้ไขปัญหาการคลิกเลือกโหนดที่ถูก `BrainHemisphere` บดบังโดยใช้เทคนิค `side={THREE.BackSide}` ช่วยให้รังสีการคลิก (Raycaster) ทะลุผ่านผิวหน้าไปโดนโหนดภายในได้ พร้อมปรับปรุงระบบจัดกลุ่มประสาท (Neural Clouds) ให้โปร่งแสงตามค่าที่กำหนด
+- **Infra Node Integrity (v4.0)**: กู้คืนการแสดงผลโหนด `persistent_queue` และ `cron_jobs` (Layer: Infra) ที่เคยถูกซ่อนไว้ โดยการปรับปรุงเงื่อนไข `isAgentNode` ใน `BrainVisualizer.tsx` ให้แสดงผลเป็นผลึก Octahedron พร้อมตัวเลขข้อมูลอย่างถูกต้อง
+- **Visual Settings UI**: เพิ่มระบบปรับแต่งความสวยงาม (Settings Panel) ที่รองรับการเปลี่ยนสีและความโปร่งแสงของส่วนประกอบต่างๆ ในสมองแบบ Real-time พร้อมระบบบันทึกค่าลง LocalStorage อัตโนมัติ
+
+### [Update 2026-03-27] Comprehensive Test & Security Cleanup 🛡️✅
+- **100% Test Pass Rate**: ปรับปรุงชุดทดสอบทั้งหมด 605 รายการให้ผ่านสมบูรณ์ โดยแก้ไขปัญหา Dependency ใน `crypto.ts`, ปรับค่า Default ใน `runtimeSettings.ts` และแก้ไขฟังก์ชันเรียกใน `swarmCoordinatorOutputGuard.test.ts`
+- **Security Fallback**: เพิ่มระบบ Environment Variable Fallback ให้กับ `resolveProviderApiKey` ใน `settingsSecurity.ts` เพื่อความยืดหยุ่นในการตั้งค่า API Keys
+- **DB Path Initialization**: แก้ไขปัญหา `config.dataDir` เป็น `undefined` ในสภาพแวดล้อม Test โดยการปรับปรุง Mock ใน `crypto.test.ts`
+
 ### [Update 2026-03-24] Gemini Model & Dynamic Router Patch 🛰️🛠️
 - **Unlock Gemini 3 Series**: แก้ไขปัญหา Model Selection Lockdown โดยปรับปรุง `geminiProvider.ts` (Alias Persistence) และ `configManager.ts` (STALE_MODEL_MAP Removal) ทำให้เลือกใช้ `gemini-3-flash-preview` ได้ถาวร
 - **Resilient Tool Selection**: ปรับปรุง `agent.ts` เพื่อจัดการกับ `JSON parsing failed` โดยเน้นการดักจับ JSON Array ของ String ที่แม่นยำขึ้น ป้องกัน SyntaxError จากข้อความรบกวนของ LLM

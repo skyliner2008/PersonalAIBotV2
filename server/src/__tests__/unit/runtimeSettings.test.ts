@@ -73,10 +73,10 @@ describe('runtimeSettings', () => {
     expect(getCommentReplyDelayMs()).toBe(5000);
     expect(getBrowserHeadless()).toBe(false);
     expect(getMaxMemoryMessages()).toBe(25);
-    expect(getVoiceToolBridgeTimeoutMs()).toBe(30000);
-    expect(getVoiceToolBridgeOutputMaxChars()).toBe(8000);
-    expect(getWebVoiceAgentTimeoutMs()).toBe(45000);
-    expect(getWebVoiceMaxTurns()).toBe(6);
+    expect(getVoiceToolBridgeTimeoutMs()).toBe(90000);
+    expect(getVoiceToolBridgeOutputMaxChars()).toBe(4000);
+    expect(getWebVoiceAgentTimeoutMs()).toBe(80000);
+    expect(getWebVoiceMaxTurns()).toBe(8);
     expect(getWebVoiceSkipReviewerGate()).toBe(true);
     expect(getWebVoiceSkipBackgroundEnrichment()).toBe(true);
     expect(getSwarmSkipReviewerGate()).toBe(true);

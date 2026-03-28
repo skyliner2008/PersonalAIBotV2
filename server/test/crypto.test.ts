@@ -17,6 +17,7 @@ import {
 // Mock config for testing
 vi.mock('../src/config.js', () => ({
   config: {
+    dataDir: './data',
     encryption: {
       key: 'test-encryption-key-32-bytes-long!!',
       algorithm: 'aes-256-gcm',
@@ -24,6 +25,10 @@ vi.mock('../src/config.js', () => ({
       authTagLength: 16,
     },
   },
+}));
+
+vi.mock('../src/database/db.js', () => ({
+  getCredential: vi.fn(() => null),
 }));
 
 describe('Encryption Module', () => {
@@ -155,8 +160,8 @@ describe('Encryption Module', () => {
       const encrypted = encryptObject(obj);
       const decrypted = decryptObject(encrypted);
       
-      expect(decrypted.nullVal).toBeNull();
-      expect(decrypted.undefinedVal).toBeUndefined();
+      expect((decrypted as any).nullVal).toBeNull();
+      expect((decrypted as any).undefinedVal).toBeUndefined();
     });
   });
 
